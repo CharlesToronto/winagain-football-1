@@ -1,0 +1,9 @@
+{
+  "imports": {},
+  "compilerOptions": {
+    "lib": ["deno.ns", "dom"]
+  },
+  "config": {
+    "jwtVerify": false
+  }
+}

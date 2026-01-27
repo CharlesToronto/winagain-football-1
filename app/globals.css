@@ -1,0 +1,129 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --aurora-1: rgba(166, 2, 255, 0.178);
+  --aurora-2: rgba(3, 124, 155, 0.397);
+  --aurora-3: rgba(68, 36, 143, 0.329);
+  --aurora-4: rgba(68, 4, 77, 0.11);
+  --card-bg: rgba(34, 4, 32, 0.651);
+  --card-bg-soft: rgba(255, 2, 2, 0);
+}
+
+body {
+  @apply min-h-screen text-gray-100;
+  background-color: #0b0014;
+  background-image:
+    radial-gradient(1200px 1000px at 70% 20%, var(--aurora-2) 0%, transparent 70%),
+    radial-gradient(1800px 1200px at 20% 55%, var(--aurora-1) 0%, transparent 60%),
+    radial-gradient(1000px 900px at 30% 65%, var(--aurora-3) 0%, transparent 65%),
+    radial-gradient(900px 14000px at 55% 90%, var(--aurora-4) 0%, transparent 90%);
+  background-attachment: fixed;
+  background-size: 170% 170%, 190% 190%, 180% 180%, 200% 200%;
+  background-blend-mode: screen, screen, screen, screen;
+  animation: aurora-diagonal 18s ease-in-out infinite alternate;
+  min-height: 100vh;
+}
+
+.team-page {
+  --card-bg: rgba(0, 0, 0, 0.2);
+  --card-bg-soft: rgba(95, 88, 122, 0.062);
+}
+
+:is(div, section, article, aside).bg-white\/10 {
+  background-color: var(--card-bg);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+}
+
+:is(div, section, article, aside).bg-white\/5 {
+  background-color: var(--card-bg-soft);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+}
+
+@keyframes aurora-diagonal {
+  10% {
+    background-position: 0% 0%, 15% 5%, 5% 20%, 20% 15%;
+  }
+  100% {
+    background-position: 100% 100%, 85% 25%, 95% 50%, 40% 85%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    animation: none;
+  }
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.4) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.35);
+  border-radius: 9999px;
+}
+
+.glass-card {
+  @apply rounded-xl shadow-soft border border-white/10 backdrop-blur-md;
+  background-color: var(--card-bg);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+}
+
+.section-title {
+  @apply text-xl font-semibold text-white flex items-center gap-2;
+}
+
+.badge {
+  @apply px-3 py-1 rounded-full text-xs font-semibold bg-white/20 text-white;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .mobile-hide {
+    display: none !important;
+  }
+
+  .mobile-show {
+    display: block !important;
+  }
+
+  .mobile-main {
+    margin-left: 0 !important;
+    padding-bottom: 6rem !important;
+  }
+
+  .mobile-fab {
+    top: 0.75rem !important;
+    right: 0.75rem !important;
+    bottom: auto !important;
+    flex-direction: column !important;
+  }
+
+  .mobile-actions {
+    position: fixed !important;
+    top: auto !important;
+    right: 1rem !important;
+    bottom: 5.75rem !important;
+    left: auto !important;
+  }
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
