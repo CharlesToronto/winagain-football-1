@@ -101,6 +101,26 @@ type NextMatchInfo = {
   awayId: number | null;
 };
 
+const normalizeBacktestFixture = (fixture: any): BacktestFixture => {
+  const resolveTeam = (value: any) => {
+    if (!value) return null;
+    if (Array.isArray(value)) return value[0] ?? null;
+    return value;
+  };
+
+  return {
+    id: Number(fixture?.id ?? 0),
+    date_utc: fixture?.date_utc ?? null,
+    competition_id: fixture?.competition_id ?? null,
+    home_team_id: fixture?.home_team_id ?? null,
+    away_team_id: fixture?.away_team_id ?? null,
+    goals_home: fixture?.goals_home ?? null,
+    goals_away: fixture?.goals_away ?? null,
+    teams: resolveTeam(fixture?.teams),
+    opp: resolveTeam(fixture?.opp),
+  };
+};
+
 const BASELINE_HOME = 1.35;
 const BASELINE_AWAY = 1.15;
 
@@ -508,7 +528,11 @@ export default function DailyScannerPanel() {
           const seasonFixtures = await Promise.all(
             seasons.map((season) => getLeagueFixturesBySeason(leagueId, season))
           );
-          leagueFixturesMap.set(leagueId, seasonFixtures.flat());
+          const normalized = seasonFixtures
+            .flat()
+            .map(normalizeBacktestFixture)
+            .filter((fixture) => Number.isFinite(fixture.id) && fixture.id > 0);
+          leagueFixturesMap.set(leagueId, normalized);
         })
       );
 
@@ -610,19 +634,23 @@ export default function DailyScannerPanel() {
             teamSettingsMap.set(teamId, resolvedSettings);
             persistLocalTeamSettings(teamId, resolvedSettings);
             autoSavedTeams.add(teamId);
-            void supabaseBrowser
-              .from("team_algo_settings")
-              .upsert(
-                {
-                  user_id: userId,
-                  team_id: teamId,
-                  settings: resolvedSettings,
-                  updated_at: new Date().toISOString(),
-                },
-                { onConflict: "user_id,team_id" }
-              )
-              .then(() => undefined)
-              .catch(() => undefined);
+            void (async () => {
+              try {
+                await supabaseBrowser
+                  .from("team_algo_settings")
+                  .upsert(
+                    {
+                      user_id: userId,
+                      team_id: teamId,
+                      settings: resolvedSettings,
+                      updated_at: new Date().toISOString(),
+                    },
+                    { onConflict: "user_id,team_id" }
+                  );
+              } catch {
+                // Ignore persist errors for background auto-saves
+              }
+            })();
           }
 
           const pickResult = computeUpcomingPick(leagueFixtures, matchInfo, evalResult.settings);

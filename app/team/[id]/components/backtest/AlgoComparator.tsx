@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getLeagueFixturesBySeason } from "@/lib/queries/fixtures";
 import { useTeamAlgoSettings } from "@/app/components/algo/useTeamAlgoSettings";
+import Card from "@/app/components/ui/Card";
 import {
   AlgoSettings,
   type MarketLine,
