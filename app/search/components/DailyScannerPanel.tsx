@@ -810,11 +810,16 @@ export default function DailyScannerPanel() {
           )
             .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
             .map((group) => (
-              <div key={group.id} className="space-y-3">
-                <div className="text-xs uppercase tracking-wide text-blue-300">
-                  {(group.country ?? "Pays inconnu") + " - " + group.name}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <details
+                key={group.id}
+                className="rounded-xl border border-white/10 bg-white/5 p-4"
+                open
+              >
+                <summary className="cursor-pointer select-none text-xs uppercase tracking-wide text-blue-300">
+                  {(group.country ?? "Pays inconnu") + " - " + group.name} •{" "}
+                  {group.items.length} match(s)
+                </summary>
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
                   {group.items.map((row) => {
                     const targetHref = row.homeId ? `/team/${row.homeId}` : null;
                     const Wrapper = targetHref ? Link : "div";
@@ -875,7 +880,7 @@ export default function DailyScannerPanel() {
                     );
                   })}
                 </div>
-              </div>
+              </details>
             ))}
         </div>
       ) : null}

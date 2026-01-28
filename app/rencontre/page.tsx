@@ -320,11 +320,12 @@ export default async function RencontrePage({
                     const competitionRound =
                       uniqueRounds.length === 1 ? uniqueRounds[0] : null;
                     return (
-                      <div
+                      <details
                         key={`competition-${section.key}-${group.competition.id}`}
-                        className="space-y-3"
+                        className="rounded-xl border border-white/10 bg-white/5"
+                        open
                       >
-                        <div className="flex items-center gap-3">
+                        <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
                           {group.competition.logo ? (
                             <img
                               src={group.competition.logo}
@@ -334,7 +335,7 @@ export default async function RencontrePage({
                           ) : (
                             <div className="w-8 h-8 rounded-md bg-white/10 border border-white/10" />
                           )}
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <div className="font-semibold truncate">{competitionLabel}</div>
                             <div className="text-xs text-white/60 flex items-center gap-2">
                               <span>{group.fixtures.length} matchs</span>
@@ -346,9 +347,10 @@ export default async function RencontrePage({
                               ) : null}
                             </div>
                           </div>
-                        </div>
+                          <span className="text-xs text-white/50">Réduire</span>
+                        </summary>
 
-                        <div className="space-y-2">
+                        <div className="px-4 pb-4 space-y-2">
                           {group.fixtures.map((fixture) => {
                             const homeHref = Number.isFinite(fixture.home?.id)
                               ? `/team/${fixture.home?.id}`
@@ -425,7 +427,7 @@ export default async function RencontrePage({
                             );
                           })}
                         </div>
-                      </div>
+                      </details>
                     );
                   })}
                 </div>

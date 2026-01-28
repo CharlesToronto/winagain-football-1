@@ -378,10 +378,10 @@ export default function BacktestView({
       <Card
         className={`text-white !bg-gradient-to-br ${
           hasUpcomingPick
-            ? "!border-0 from-pink-500 via-fuchsia-500 to-rose-500"
+            ? "!border-0 from-[#7a0b4b] via-[#a01468] to-[#d02a82]"
             : nextPick.status === "no-bet"
-            ? "!border-0 from-pink-500/50 via-fuchsia-500/50 to-rose-500/50"
-            : "!border-0 from-[#2a0f1f] via-[#1c0f2c] to-[#120a1d]"
+            ? "!border-0 from-[#7a0b4b]/70 via-[#a01468]/70 to-[#d02a82]/70"
+            : "!border-0 from-[#2a0b1a] via-[#1f0b20] to-[#140815]"
         }`}
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

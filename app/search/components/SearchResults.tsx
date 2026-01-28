@@ -77,18 +77,21 @@ export function SearchResults({
   return (
     <div className="mt-4 space-y-6">
       {groupedResults.map((group) => (
-        <div key={group.league} className="space-y-3">
-          <div className="text-sm font-semibold text-white/80 uppercase tracking-wide">
-            {group.league}
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <details
+          key={group.league}
+          className="rounded-xl border border-white/10 bg-white/5 p-4"
+          open
+        >
+          <summary className="cursor-pointer select-none text-sm font-semibold text-white/80 uppercase tracking-wide">
+            {group.league} • {group.teams.length} équipes
+          </summary>
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
             {group.teams.map((team) => (
               <TeamResultCard key={team.id} team={team} />
             ))}
           </div>
-        </div>
+        </details>
       ))}
     </div>
   );
 }
-
