@@ -1,0 +1,14 @@
+{
+  "crons": [
+    {
+      "path": "/api/jobs/daily-algo?task=all",
+      "schedule": "0 8 * * *",
+      "timezone": "America/Toronto"
+    },
+    {
+      "path": "/api/update/fixtures",
+      "schedule": "0 18 * * *",
+      "timezone": "America/Toronto"
+    }
+  ]
+}

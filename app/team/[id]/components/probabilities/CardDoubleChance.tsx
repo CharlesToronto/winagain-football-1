@@ -29,6 +29,8 @@ export default function CardDoubleChance({
   highlightKeys,
   highlightActive,
   mode = "FT",
+  showOdds,
+  odds,
 }: {
   data: any;
   streaks: any;
@@ -39,6 +41,8 @@ export default function CardDoubleChance({
   highlightKeys?: Set<string>;
   highlightActive?: boolean;
   mode?: Mode;
+  showOdds?: boolean;
+  odds?: Record<"1X" | "X2" | "12", string> | null;
 }) {
   const [location, setLocation] = useState<Location>("all");
   const engines = useMemo(() => getProbabilityEngines(), []);
@@ -132,6 +136,8 @@ export default function CardDoubleChance({
               : percentFallback
           }
           selectionCategory={selectionCategory}
+          showOdd={showOdds}
+          odd={odds?.["1X"]}
         />
         <StatRow
           label="X2"
@@ -145,6 +151,8 @@ export default function CardDoubleChance({
               : percentFallback
           }
           selectionCategory={selectionCategory}
+          showOdd={showOdds}
+          odd={odds?.["X2"]}
         />
         <StatRow
           label="12"
@@ -158,6 +166,8 @@ export default function CardDoubleChance({
               : percentFallback
           }
           selectionCategory={selectionCategory}
+          showOdd={showOdds}
+          odd={odds?.["12"]}
         />
       </div>
     </div>

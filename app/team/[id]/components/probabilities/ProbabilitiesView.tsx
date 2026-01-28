@@ -85,6 +85,10 @@ export default function ProbabilitiesView({
   overUnderMatchKeys,
   overUnderHighlight,
   showOpponentComparison,
+  showOdds,
+  fixtureId,
+  leagueId,
+  season,
   filter,
   onFilterChange,
   cibleActive,
@@ -99,6 +103,10 @@ export default function ProbabilitiesView({
   overUnderMatchKeys?: Set<string>;
   overUnderHighlight?: boolean;
   showOpponentComparison?: boolean;
+  showOdds?: boolean;
+  fixtureId?: number | null;
+  leagueId?: number | null;
+  season?: number | null;
   filter: FilterKey;
   onFilterChange: (value: FilterKey) => void;
   cibleActive?: boolean;
@@ -109,6 +117,19 @@ export default function ProbabilitiesView({
   const [mobileSummaryIndex, setMobileSummaryIndex] = useState(0);
   const mobileSummaryRef = useRef<HTMLDivElement | null>(null);
   const mobileSummarySlides = 2;
+  const [overUnderOdds, setOverUnderOdds] = useState<{
+    over: Record<string, string>;
+    under: Record<string, string>;
+  } | null>(null);
+  const [doubleChanceOdds, setDoubleChanceOdds] = useState<
+    Record<"1X" | "X2" | "12", string> | null
+  >(null);
+  const [bttsOdds, setBttsOdds] = useState<{ yes: string; no: string } | null>(null);
+  const [cleanSheetOdds, setCleanSheetOdds] = useState<{
+    home: { yes: string; no: string };
+    away: { yes: string; no: string };
+  } | null>(null);
+  const [overUnderOddsLoading, setOverUnderOddsLoading] = useState(false);
   const [teamGoalsFocus, setTeamGoalsFocus] = useState<"for" | "against">("for");
   const [halfWinLocation, setHalfWinLocation] = useState<"all" | "home" | "away">(
     "all"
@@ -138,6 +159,52 @@ export default function ProbabilitiesView({
     streaks: streakStats,
   };
   const streaks = streakStats;
+
+  useEffect(() => {
+    let active = true;
+    if (!showOdds || !fixtureId || !leagueId || !season) {
+      setOverUnderOdds(null);
+      setDoubleChanceOdds(null);
+      setBttsOdds(null);
+      setCleanSheetOdds(null);
+      setOverUnderOddsLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+    setOverUnderOddsLoading(true);
+    fetch(
+      `/api/odds/fixture?fixture=${fixtureId}&league=${leagueId}&season=${season}&bookmaker=1`
+    )
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error(`Odds API error: ${res.status}`);
+        }
+        return res.json();
+      })
+      .then((data) => {
+        if (!active) return;
+        setOverUnderOdds(data?.odds?.overUnder ?? null);
+        setDoubleChanceOdds(data?.odds?.doubleChance ?? null);
+        setBttsOdds(data?.odds?.btts ?? null);
+        setCleanSheetOdds(data?.odds?.cleanSheet ?? null);
+      })
+      .catch(() => {
+        if (!active) return;
+        setOverUnderOdds(null);
+        setDoubleChanceOdds(null);
+        setBttsOdds(null);
+        setCleanSheetOdds(null);
+      })
+      .finally(() => {
+        if (!active) return;
+        setOverUnderOddsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [showOdds, fixtureId, leagueId, season]);
   const calendarActive = Boolean(cutoffDate);
   const cardBorderClass = calendarActive
     ? "rounded-xl border border-red-500/70"
@@ -361,6 +428,11 @@ export default function ProbabilitiesView({
                     opponentFixtures={opponentFixtures}
                     showOpponentComparison={opponentComparisonActive}
                     mode={filter}
+                    showOdds={Boolean(showOdds) && !overUnderOddsLoading}
+                    odds={{
+                      btts: bttsOdds,
+                      cleanSheet: cleanSheetOdds,
+                    }}
                   />
                 </div>
               </div>
@@ -379,6 +451,8 @@ export default function ProbabilitiesView({
                     highlightKeys={overUnderMatchKeys}
                     highlightActive={overUnderHighlight}
                     mode={filter}
+                    showOdds={Boolean(showOdds) && !overUnderOddsLoading}
+                    odds={doubleChanceOdds}
                   />
                 </div>
               </div>
@@ -404,6 +478,11 @@ export default function ProbabilitiesView({
               opponentFixtures={opponentFixtures}
               showOpponentComparison={opponentComparisonActive}
               mode={filter}
+              showOdds={Boolean(showOdds) && !overUnderOddsLoading}
+              odds={{
+                btts: bttsOdds,
+                cleanSheet: cleanSheetOdds,
+              }}
             />
           </div>
         </div>
@@ -426,6 +505,8 @@ export default function ProbabilitiesView({
               highlightKeys={overUnderMatchKeys}
               highlightActive={overUnderHighlight}
               mode={filter}
+              showOdds={Boolean(showOdds) && !overUnderOddsLoading}
+              odds={doubleChanceOdds}
             />
           </div>
         </div>
@@ -461,6 +542,8 @@ export default function ProbabilitiesView({
               opponentData={opponentStats}
               highlightKeys={overUnderMatchKeys}
               highlightActive={overUnderHighlight}
+              showOdds={Boolean(showOdds) && !overUnderOddsLoading}
+              odds={overUnderOdds}
             />
           </div>
         </div>
@@ -559,7 +642,16 @@ export default function ProbabilitiesView({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
         <div className="hidden">
           <div className={cardBorderClass}>
-            <CardSeries data={stats} streaks={streaks} opponentData={opponentStats} />
+            <CardSeries
+              data={stats}
+              streaks={streaks}
+              opponentData={opponentStats}
+              showOdds={Boolean(showOdds) && !overUnderOddsLoading}
+              odds={{
+                btts: bttsOdds,
+                cleanSheet: cleanSheetOdds,
+              }}
+            />
           </div>
         </div>
         <div className="hidden">
@@ -608,7 +700,3 @@ export default function ProbabilitiesView({
     </div>
   );
 }
-
-
-
-

@@ -6,12 +6,16 @@ export default function CardOverUnder({
   opponentData,
   highlightKeys,
   highlightActive,
+  showOdds,
+  odds,
 }: {
   data: any;
   streaks: any;
   opponentData?: any;
   highlightKeys?: Set<string>;
   highlightActive?: boolean;
+  showOdds?: boolean;
+  odds?: { over: Record<string, string>; under: Record<string, string> } | null;
 }) {
   const statsEngine = data;
   const resolvedStreaks = data?.streaks ?? streaks ?? {};
@@ -35,24 +39,23 @@ export default function CardOverUnder({
       <h3 className="font-semibold mb-3">Over / Under</h3>
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1">
-          <StatRow label="+0.5" count={`(${val(over["0.5"]).raw}/${total})`} percentGreen={`${val(over["0.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentOver["0.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["0.5"]?.active ? `${resolvedStreaks.over["0.5"].percent}%` : "–"} highlight={shouldHighlight("over", "0.5")} selectionCategory="Over / Under" />
-          <StatRow label="+1.5" count={`(${val(over["1.5"]).raw}/${total})`} percentGreen={`${val(over["1.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentOver["1.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["1.5"]?.active ? `${resolvedStreaks.over["1.5"].percent}%` : "–"} highlight={shouldHighlight("over", "1.5")} selectionCategory="Over / Under" />
-          <StatRow label="+2.5" count={`(${val(over["2.5"]).raw}/${total})`} percentGreen={`${val(over["2.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentOver["2.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["2.5"]?.active ? `${resolvedStreaks.over["2.5"].percent}%` : "–"} highlight={shouldHighlight("over", "2.5")} selectionCategory="Over / Under" />
-          <StatRow label="+3.5" count={`(${val(over["3.5"]).raw}/${total})`} percentGreen={`${val(over["3.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentOver["3.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["3.5"]?.active ? `${resolvedStreaks.over["3.5"].percent}%` : "–"} highlight={shouldHighlight("over", "3.5")} selectionCategory="Over / Under" />
-          <StatRow label="+4.5" count={`(${val(over["4.5"]).raw}/${total})`} percentGreen={`${val(over["4.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentOver["4.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["4.5"]?.active ? `${resolvedStreaks.over["4.5"].percent}%` : "–"} highlight={shouldHighlight("over", "4.5")} selectionCategory="Over / Under" />
-          <StatRow label="+5.5" count={`(${val(over["5.5"]).raw}/${total})`} percentGreen={`${val(over["5.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentOver["5.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["5.5"]?.active ? `${resolvedStreaks.over["5.5"].percent}%` : "–"} highlight={shouldHighlight("over", "5.5")} selectionCategory="Over / Under" />
+          <StatRow label="+0.5" count={`(${val(over["0.5"]).raw}/${total})`} percentGreen={`${val(over["0.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentOver["0.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["0.5"]?.active ? `${resolvedStreaks.over["0.5"].percent}%` : "–"} highlight={shouldHighlight("over", "0.5")} selectionCategory="Over / Under" showOdd={showOdds} odd={odds?.over?.["0.5"]} />
+          <StatRow label="+1.5" count={`(${val(over["1.5"]).raw}/${total})`} percentGreen={`${val(over["1.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentOver["1.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["1.5"]?.active ? `${resolvedStreaks.over["1.5"].percent}%` : "–"} highlight={shouldHighlight("over", "1.5")} selectionCategory="Over / Under" showOdd={showOdds} odd={odds?.over?.["1.5"]} />
+          <StatRow label="+2.5" count={`(${val(over["2.5"]).raw}/${total})`} percentGreen={`${val(over["2.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentOver["2.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["2.5"]?.active ? `${resolvedStreaks.over["2.5"].percent}%` : "–"} highlight={shouldHighlight("over", "2.5")} selectionCategory="Over / Under" showOdd={showOdds} odd={odds?.over?.["2.5"]} />
+          <StatRow label="+3.5" count={`(${val(over["3.5"]).raw}/${total})`} percentGreen={`${val(over["3.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentOver["3.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["3.5"]?.active ? `${resolvedStreaks.over["3.5"].percent}%` : "–"} highlight={shouldHighlight("over", "3.5")} selectionCategory="Over / Under" showOdd={showOdds} odd={odds?.over?.["3.5"]} />
+          <StatRow label="+4.5" count={`(${val(over["4.5"]).raw}/${total})`} percentGreen={`${val(over["4.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentOver["4.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["4.5"]?.active ? `${resolvedStreaks.over["4.5"].percent}%` : "–"} highlight={shouldHighlight("over", "4.5")} selectionCategory="Over / Under" showOdd={showOdds} odd={odds?.over?.["4.5"]} />
+          <StatRow label="+5.5" count={`(${val(over["5.5"]).raw}/${total})`} percentGreen={`${val(over["5.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentOver["5.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["5.5"]?.active ? `${resolvedStreaks.over["5.5"].percent}%` : "–"} highlight={shouldHighlight("over", "5.5")} selectionCategory="Over / Under" showOdd={showOdds} odd={odds?.over?.["5.5"]} />
         </div>
         <div className="space-y-1">
-          <StatRow label="-0.5" count={`(${val(under["0.5"]).raw}/${total})`} percentGreen={`${val(under["0.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentUnder["0.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["0.5"]?.active ? `${resolvedStreaks.under["0.5"].percent}%` : "–"} highlight={shouldHighlight("under", "0.5")} selectionCategory="Over / Under" />
-          <StatRow label="-1.5" count={`(${val(under["1.5"]).raw}/${total})`} percentGreen={`${val(under["1.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentUnder["1.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["1.5"]?.active ? `${resolvedStreaks.under["1.5"].percent}%` : "–"} highlight={shouldHighlight("under", "1.5")} selectionCategory="Over / Under" />
-          <StatRow label="-2.5" count={`(${val(under["2.5"]).raw}/${total})`} percentGreen={`${val(under["2.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentUnder["2.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["2.5"]?.active ? `${resolvedStreaks.under["2.5"].percent}%` : "–"} highlight={shouldHighlight("under", "2.5")} selectionCategory="Over / Under" />
-          <StatRow label="-3.5" count={`(${val(under["3.5"]).raw}/${total})`} percentGreen={`${val(under["3.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentUnder["3.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["3.5"]?.active ? `${resolvedStreaks.under["3.5"].percent}%` : "–"} highlight={shouldHighlight("under", "3.5")} selectionCategory="Over / Under" />
-          <StatRow label="-4.5" count={`(${val(under["4.5"]).raw}/${total})`} percentGreen={`${val(under["4.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentUnder["4.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["4.5"]?.active ? `${resolvedStreaks.under["4.5"].percent}%` : "–"} highlight={shouldHighlight("under", "4.5")} selectionCategory="Over / Under" />
-          <StatRow label="-5.5" count={`(${val(under["5.5"]).raw}/${total})`} percentGreen={`${val(under["5.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentUnder["5.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["5.5"]?.active ? `${resolvedStreaks.under["5.5"].percent}%` : "–"} highlight={shouldHighlight("under", "5.5")} selectionCategory="Over / Under" />
+          <StatRow label="-0.5" count={`(${val(under["0.5"]).raw}/${total})`} percentGreen={`${val(under["0.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentUnder["0.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["0.5"]?.active ? `${resolvedStreaks.under["0.5"].percent}%` : "–"} highlight={shouldHighlight("under", "0.5")} selectionCategory="Over / Under" showOdd={showOdds} odd={odds?.under?.["0.5"]} />
+          <StatRow label="-1.5" count={`(${val(under["1.5"]).raw}/${total})`} percentGreen={`${val(under["1.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentUnder["1.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["1.5"]?.active ? `${resolvedStreaks.under["1.5"].percent}%` : "–"} highlight={shouldHighlight("under", "1.5")} selectionCategory="Over / Under" showOdd={showOdds} odd={odds?.under?.["1.5"]} />
+          <StatRow label="-2.5" count={`(${val(under["2.5"]).raw}/${total})`} percentGreen={`${val(under["2.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentUnder["2.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["2.5"]?.active ? `${resolvedStreaks.under["2.5"].percent}%` : "–"} highlight={shouldHighlight("under", "2.5")} selectionCategory="Over / Under" showOdd={showOdds} odd={odds?.under?.["2.5"]} />
+          <StatRow label="-3.5" count={`(${val(under["3.5"]).raw}/${total})`} percentGreen={`${val(under["3.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentUnder["3.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["3.5"]?.active ? `${resolvedStreaks.under["3.5"].percent}%` : "–"} highlight={shouldHighlight("under", "3.5")} selectionCategory="Over / Under" showOdd={showOdds} odd={odds?.under?.["3.5"]} />
+          <StatRow label="-4.5" count={`(${val(under["4.5"]).raw}/${total})`} percentGreen={`${val(under["4.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentUnder["4.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["4.5"]?.active ? `${resolvedStreaks.under["4.5"].percent}%` : "–"} highlight={shouldHighlight("under", "4.5")} selectionCategory="Over / Under" showOdd={showOdds} odd={odds?.under?.["4.5"]} />
+          <StatRow label="-5.5" count={`(${val(under["5.5"]).raw}/${total})`} percentGreen={`${val(under["5.5"]).percent}%`} percentOrange={showOpponent ? `${val(opponentUnder["5.5"]).percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["5.5"]?.active ? `${resolvedStreaks.under["5.5"].percent}%` : "–"} highlight={shouldHighlight("under", "5.5")} selectionCategory="Over / Under" showOdd={showOdds} odd={odds?.under?.["5.5"]} />
         </div>
       </div>
     </div>
   );
 }
-
 

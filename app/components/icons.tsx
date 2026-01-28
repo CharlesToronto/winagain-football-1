@@ -89,6 +89,19 @@ export function IconDatabase({ size = 18, ...props }: IconProps) {
   );
 }
 
+export function IconChart({ size = 18, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden {...baseProps} {...props}>
+      <path d="M3 3v18h18" />
+      <polyline points="6 15 10 11 13 14 18 8" />
+      <circle cx="6" cy="15" r="1" />
+      <circle cx="10" cy="11" r="1" />
+      <circle cx="13" cy="14" r="1" />
+      <circle cx="18" cy="8" r="1" />
+    </svg>
+  );
+}
+
 export function IconMessage({ size = 18, ...props }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden {...baseProps} {...props}>

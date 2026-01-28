@@ -22,6 +22,8 @@ type FixtureRow = {
   status_short: string | null;
   round: string | null;
   competition_id: number | null;
+  goals_home?: number | null;
+  goals_away?: number | null;
   home?: TeamInfo | null;
   away?: TeamInfo | null;
 };
@@ -106,15 +108,20 @@ export default async function RencontrePage({
 }) {
   const now = new Date();
   const today = startOfDay(now);
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
   const tomorrow = new Date(today);
   tomorrow.setDate(today.getDate() + 1);
   const dayAfterTomorrow = new Date(today);
   dayAfterTomorrow.setDate(today.getDate() + 2);
 
+  const yesterdayKey = formatDateKey(yesterday);
   const todayKey = formatDateKey(today);
   const tomorrowKey = formatDateKey(tomorrow);
   const activeDay =
-    searchParams?.day === "today"
+    searchParams?.day === "yesterday"
+      ? "yesterday"
+      : searchParams?.day === "today"
       ? "today"
       : searchParams?.day === "tomorrow"
         ? "tomorrow"
@@ -129,12 +136,14 @@ export default async function RencontrePage({
       date_utc,
       status_short,
       round,
+      goals_home,
+      goals_away,
       competition_id,
       home:home_team_id ( id, name, logo ),
       away:away_team_id ( id, name, logo )
     `
     )
-    .gte("date_utc", today.toISOString())
+    .gte("date_utc", yesterday.toISOString())
     .lt("date_utc", dayAfterTomorrow.toISOString())
     .order("date_utc", { ascending: true });
 
@@ -144,6 +153,8 @@ export default async function RencontrePage({
     status_short: row.status_short ?? null,
     round: row.round ?? null,
     competition_id: row.competition_id ?? null,
+    goals_home: typeof row.goals_home === "number" ? row.goals_home : null,
+    goals_away: typeof row.goals_away === "number" ? row.goals_away : null,
     home: normalizeTeamInfo(row.home),
     away: normalizeTeamInfo(row.away),
   }));
@@ -207,6 +218,7 @@ export default async function RencontrePage({
   };
 
   const dayGroups = new Map<string, Map<number, FixtureGroup>>([
+    [yesterdayKey, new Map()],
     [todayKey, new Map()],
     [tomorrowKey, new Map()],
   ]);
@@ -245,7 +257,9 @@ export default async function RencontrePage({
   };
 
   const sections =
-    activeDay === "today"
+    activeDay === "yesterday"
+      ? [{ key: yesterdayKey, title: "Hier" }]
+      : activeDay === "today"
       ? [{ key: todayKey, title: "Aujourd'hui" }]
       : activeDay === "tomorrow"
         ? [{ key: tomorrowKey, title: "Demain" }]
@@ -254,45 +268,45 @@ export default async function RencontrePage({
             { key: tomorrowKey, title: "Demain" },
           ];
 
+  const yesterdayHref =
+    activeDay === "yesterday" ? "/rencontre" : "/rencontre?day=yesterday";
   const todayHref = activeDay === "today" ? "/rencontre" : "/rencontre?day=today";
   const tomorrowHref =
     activeDay === "tomorrow" ? "/rencontre" : "/rencontre?day=tomorrow";
-  const headerSubtitle =
-    activeDay === "today"
-      ? "Aujourd'hui"
-      : activeDay === "tomorrow"
-        ? "Demain"
-        : "Aujourd'hui & Demain";
 
   return (
     <div className="min-h-screen p-6 text-white">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
-        <div className="space-y-1">
-          <h1 className="text-3xl font-bold">Rencontre</h1>
-          <div className="text-sm text-white/70">{headerSubtitle}</div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href={todayHref}
-            className={`px-3 py-1 text-xs rounded-md border transition ${
-              activeDay === "today"
-                ? "border-white text-white"
-                : "border-transparent text-white/60 hover:text-white/80"
-            }`}
-          >
-            Aujourd'hui
-          </Link>
-          <Link
-            href={tomorrowHref}
-            className={`px-3 py-1 text-xs rounded-md border transition ${
-              activeDay === "tomorrow"
-                ? "border-white text-white"
-                : "border-transparent text-white/60 hover:text-white/80"
-            }`}
-          >
-            Demain
-          </Link>
-        </div>
+      <div className="flex items-center gap-2 mb-6">
+        <Link
+          href={yesterdayHref}
+          className={`px-3 py-1 rounded-lg text-sm transition ${
+            activeDay === "yesterday"
+              ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
+              : "bg-white/10 text-white/70 hover:bg-white/20"
+          }`}
+        >
+          Hier
+        </Link>
+        <Link
+          href={todayHref}
+          className={`px-3 py-1 rounded-lg text-sm transition ${
+            activeDay === "today"
+              ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
+              : "bg-white/10 text-white/70 hover:bg-white/20"
+          }`}
+        >
+          Aujourd'hui
+        </Link>
+        <Link
+          href={tomorrowHref}
+          className={`px-3 py-1 rounded-lg text-sm transition ${
+            activeDay === "tomorrow"
+              ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
+              : "bg-white/10 text-white/70 hover:bg-white/20"
+          }`}
+        >
+          Demain
+        </Link>
       </div>
 
       {error ? (
@@ -306,11 +320,11 @@ export default async function RencontrePage({
           const groups = sectionData(section.key);
           return (
             <div key={section.key} className="space-y-4">
-              <div className="text-lg font-semibold">{section.title}</div>
+              <div className="sr-only">{section.title}</div>
               {groups.length === 0 ? (
                 <div className="text-sm text-white/60">Aucun match prévu.</div>
               ) : (
-                <div className="space-y-12">
+                <div className="space-y-4">
                   {groups.map((group) => {
                     const competitionLabel = formatCompetitionLabel(group.competition);
                     const roundLabels = group.fixtures
@@ -321,11 +335,10 @@ export default async function RencontrePage({
                       uniqueRounds.length === 1 ? uniqueRounds[0] : null;
                     return (
                       <details
-                        key={`competition-${section.key}-${group.competition.id}`}
-                        className="rounded-xl border border-white/10 bg-white/5"
-                        open
+                        key={`competition-${section.key}-${group.competition.id}-${activeDay}`}
+                        className="group -mx-4 px-2 rounded-xl bg-transparent"
                       >
-                        <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none">
+                        <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none rounded-xl border border-white/10 group-open:border-transparent text-[11px]">
                           {group.competition.logo ? (
                             <img
                               src={group.competition.logo}
@@ -336,8 +349,8 @@ export default async function RencontrePage({
                             <div className="w-8 h-8 rounded-md bg-white/10 border border-white/10" />
                           )}
                           <div className="min-w-0 flex-1">
-                            <div className="font-semibold truncate">{competitionLabel}</div>
-                            <div className="text-xs text-white/60 flex items-center gap-2">
+                            <div className="font-semibold truncate text-[12px]">{competitionLabel}</div>
+                            <div className="text-[10px] text-white/60 flex items-center gap-2">
                               <span>{group.fixtures.length} matchs</span>
                               {competitionRound ? (
                                 <>
@@ -347,74 +360,83 @@ export default async function RencontrePage({
                               ) : null}
                             </div>
                           </div>
-                          <span className="text-xs text-white/50">Réduire</span>
+                          <span className="text-white/50 transition-transform group-open:rotate-180 animate-pulse group-open:animate-none motion-reduce:animate-none">
+                            <svg
+                              viewBox="0 0 24 24"
+                              width={16}
+                              height={16}
+                              aria-hidden
+                            >
+                              <path
+                                d="M6 9l6 6 6-6"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          </span>
                         </summary>
 
-                        <div className="px-4 pb-4 space-y-2">
+                        <div className="-mx-4 px-2 pb-4 space-y-2">
                           {group.fixtures.map((fixture) => {
                             const homeHref = Number.isFinite(fixture.home?.id)
                               ? `/team/${fixture.home?.id}`
                               : null;
-                            const homePercent = getTeamUnderPercent(fixture.home?.id);
-                            const awayPercent = getTeamUnderPercent(fixture.away?.id);
                             const roundLabel =
                               fixture.round && fixture.round === competitionRound
                                 ? null
                                 : fixture.round ?? "Marché -3.5";
-                            const showMeta =
-                              Boolean(roundLabel) || homePercent != null || awayPercent != null;
+                            const hasScore =
+                              fixture.goals_home != null && fixture.goals_away != null;
                             const row = (
                               <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 transition hover:bg-white/10">
-                                <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:grid-cols-[48px_minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 text-sm">
-                                  <div className="hidden md:block text-white/70 tabular-nums">
-                                    {formatTime(fixture.date_utc)}
-                                  </div>
+                                <div className="flex items-center justify-between text-[10px] text-white/60">
+                                  <span>{formatTime(fixture.date_utc)}</span>
+                                  <span className="truncate">{roundLabel ?? ""}</span>
+                                </div>
+                                <div className="mt-1 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-xs">
                                   <div className="flex items-center gap-2 min-w-0">
                                     {fixture.home?.logo ? (
                                       <img
                                         src={fixture.home.logo}
                                         alt={fixture.home.name ?? "Home"}
-                                        className="w-5 h-5 md:w-7 md:h-7 object-contain"
+                                        className="w-4 h-4 object-contain"
                                       />
-                                    ) : null}
-                                    <span className="truncate text-sm md:text-lg font-semibold">
+                                    ) : (
+                                      <div className="w-4 h-4 rounded-full bg-white/10" />
+                                    )}
+                                    <span className="truncate font-semibold">
                                       {fixture.home?.name ?? "Home"}
                                     </span>
                                   </div>
-                                  <div className="text-base sm:text-lg md:text-xl font-semibold text-white/80 leading-none">
-                                    VS
+                                  <div
+                                    className={`text-center ${
+                                      activeDay === "yesterday" && hasScore
+                                        ? "text-sm font-semibold text-white/90"
+                                        : "text-xs text-white/60"
+                                    }`}
+                                  >
+                                    {activeDay === "yesterday" && hasScore
+                                      ? `${fixture.goals_home} - ${fixture.goals_away}`
+                                      : "VS"}
                                   </div>
                                   <div className="flex items-center justify-end gap-2 min-w-0 text-right">
-                                    <span className="truncate text-sm md:text-lg font-semibold">
+                                    <span className="truncate font-semibold">
                                       {fixture.away?.name ?? "Away"}
                                     </span>
                                     {fixture.away?.logo ? (
                                       <img
                                         src={fixture.away.logo}
                                         alt={fixture.away.name ?? "Away"}
-                                        className="w-5 h-5 md:w-7 md:h-7 object-contain"
+                                        className="w-4 h-4 object-contain"
                                       />
-                                    ) : null}
+                                    ) : (
+                                      <div className="w-4 h-4 rounded-full bg-white/10" />
+                                    )}
                                   </div>
                                 </div>
-                                {showMeta ? (
-                                  <div className="mt-1 text-xs text-white/50 flex items-center justify-between gap-3">
-                                    <span className="truncate flex items-center gap-2">
-                                      {roundLabel ? <span>{roundLabel}</span> : null}
-                                      <span className="md:hidden text-white/60 tabular-nums">
-                                        {formatTime(fixture.date_utc)}
-                                      </span>
-                                    </span>
-                                    <span className="flex items-center gap-3 font-semibold tabular-nums">
-                                      <span className="text-emerald-300">
-                                        {homePercent != null ? `${homePercent}%` : "--"}
-                                      </span>
-                                      <span className="text-orange-300">
-                                        {awayPercent != null ? `${awayPercent}%` : "--"}
-                                      </span>
-                                    </span>
-                                  </div>
-                                ) : null}
                               </div>
                             );
 
@@ -428,8 +450,8 @@ export default async function RencontrePage({
                           })}
                         </div>
                       </details>
-                    );
-                  })}
+                  );
+                })}
                 </div>
               )}
             </div>

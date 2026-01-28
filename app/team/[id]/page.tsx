@@ -7,7 +7,6 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { format } from "date-fns";
 import { enUS } from "date-fns/locale";
 import ProbabilitiesView from "./components/probabilities/ProbabilitiesView";
-import OddsView from "./components/odds/OddsView";
 import ConfidenceView from "./components/confidence/ConfidenceView";
 import TeamAiAnalysis from "./components/TeamAiAnalysis";
 import LeagueStatsView from "./components/league/LeagueStatsView";
@@ -53,7 +52,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
   }, [asOfDate]);
 
   const [tab, setTab] = useState<
-    "dashboard" | "stats" | "odds" | "confidence" | "converter" | "league" | "backtest"
+    "dashboard" | "stats" | "confidence" | "converter" | "league" | "backtest"
   >("dashboard");
   const [probabilityFilter, setProbabilityFilter] = useState<"FT" | "HT" | "2H">("FT");
   const [team, setTeam] = useState<TeamData>(null);
@@ -68,12 +67,17 @@ export default function TeamPage({ params }: { params: { id: string } }) {
   const [favorites, setFavorites] = useState<FavoriteTeam[]>([]);
   const [opponentFixtures, setOpponentFixtures] = useState<FixtureItem[]>([]);
   const [overUnderHighlight, setOverUnderHighlight] = useState(false);
+  const [showOdds, setShowOdds] = useState(false);
   const [showOpponentComparison, setShowOpponentComparison] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [sidebarToolsTarget, setSidebarToolsTarget] = useState<HTMLElement | null>(null);
   const [mobileToolsTarget, setMobileToolsTarget] = useState<HTMLElement | null>(null);
   const [calendarFixtures, setCalendarFixtures] = useState<FixtureItem[]>([]);
+  const tabListRef = useRef<HTMLDivElement | null>(null);
+  const tabRefs = useRef(new Map<string, HTMLButtonElement | null>());
+  const rangeListRef = useRef<HTMLDivElement | null>(null);
+  const rangeRefs = useRef(new Map<string, HTMLButtonElement | null>());
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [calendarError, setCalendarError] = useState<string | null>(null);
   const [cibleActive, setCibleActive] = useState(false);
@@ -89,7 +93,6 @@ export default function TeamPage({ params }: { params: { id: string } }) {
     { key: "league", label: "League Stats" },
     { key: "backtest", label: "Algorithme" },
     { key: "confidence", label: "Confiance" },
-    { key: "odds", label: "Odds" },
   ] as const;
   const formatRangeLabel = (value: RangeOption) =>
     value === "season" ? "Saison 2025" : `${value} matchs`;
@@ -211,8 +214,6 @@ export default function TeamPage({ params }: { params: { id: string } }) {
       setTab("stats");
     } else if (tabParam === "dashboard") {
       setTab("dashboard");
-    } else if (tabParam === "odds") {
-      setTab("odds");
     } else if (tabParam === "confidence") {
       setTab("confidence");
     } else if (tabParam === "converter") {
@@ -239,6 +240,34 @@ export default function TeamPage({ params }: { params: { id: string } }) {
     setSidebarToolsTarget(document.getElementById("sidebar-tools"));
     setMobileToolsTarget(document.getElementById("mobile-tools-anchor"));
   }, []);
+
+  useEffect(() => {
+    const list = tabListRef.current;
+    const target = tabRefs.current.get(tab);
+    if (!list || !target) return;
+    const raf = requestAnimationFrame(() => {
+      target.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "center",
+      });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [tab]);
+
+  useEffect(() => {
+    const list = rangeListRef.current;
+    const target = rangeRefs.current.get(String(range));
+    if (!list || !target) return;
+    const raf = requestAnimationFrame(() => {
+      target.scrollIntoView({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "center",
+      });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [range]);
 
   useEffect(() => {
     async function load() {
@@ -350,6 +379,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
     };
   }, [fixtures, opponentFixtures, teamStats, opponentStats, team?.name, nextOpponentName]);
   const trendSignalActive = trendSignalDetails.active;
+  const oddsActive = showOdds;
 
   useEffect(() => {
     if (!overUnderMatchActive) {
@@ -397,6 +427,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
   const cibleTitle = cibleActive
     ? "Cible active (clic pour desactiver)"
     : "Activer l'outil Cible";
+  const oddsTitle = showOdds ? "Odds actives" : "Afficher les odds";
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -614,6 +645,32 @@ export default function TeamPage({ params }: { params: { id: string } }) {
       </button>
       <button
         type="button"
+        onClick={() => setShowOdds((prev) => !prev)}
+        aria-pressed={showOdds}
+        aria-label={oddsTitle}
+        title={oddsTitle}
+        className={`w-9 h-9 md:w-full md:h-8 rounded-full bg-white/10 border border-white/10 backdrop-blur-sm flex items-center justify-center md:justify-start md:gap-2 md:px-2 transition ${
+          oddsActive
+            ? "text-pink-300 shadow-[0_0_12px_rgba(236,72,153,0.6)]"
+            : "text-white/90 hover:bg-white/20"
+        }`}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          className="w-5 h-5 md:w-4 md:h-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+          aria-hidden
+        >
+          <circle cx="7" cy="7" r="2" />
+          <circle cx="17" cy="17" r="2" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6" />
+        </svg>
+        <span className="hidden md:inline-flex text-xs whitespace-nowrap">Odds</span>
+      </button>
+      <button
+        type="button"
         onClick={() => setCalendarOpen(true)}
         aria-label="Calendrier des matchs"
         title="Calendrier des matchs"
@@ -730,8 +787,8 @@ export default function TeamPage({ params }: { params: { id: string } }) {
 
   const mobileTools = mobileToolsTarget
     ? createPortal(
-        <div className="flex flex-col items-end">
-          <div className="flex flex-wrap items-center justify-end gap-2 rounded-xl border border-white/10 bg-black/30 px-2 py-2 backdrop-blur-md shadow-lg">
+        <div className="w-full">
+          <div className="w-full flex flex-wrap items-center justify-center gap-2 border border-white/10 bg-black/30 px-3 py-2 backdrop-blur-md shadow-lg">
             {toolsButtons}
           </div>
         </div>,
@@ -894,7 +951,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
           </div>
         </div>
       ) : null}
-      <div className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm opacity-80">
+      <div className="mb-6 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] sm:text-sm opacity-80">
         <Link href="/leagues" className="hover:underline">Leagues</Link>
         <span>/</span>
         {league ? (
@@ -923,7 +980,10 @@ export default function TeamPage({ params }: { params: { id: string } }) {
         </div>
       </div>
 
-      <div className="flex flex-nowrap gap-3 mb-4 overflow-x-auto no-scrollbar snap-x snap-mandatory pb-1 sm:flex-wrap sm:overflow-visible sm:justify-center">
+      <div
+        ref={rangeListRef}
+        className="flex flex-nowrap gap-3 mb-4 overflow-x-auto no-scrollbar snap-x snap-mandatory pb-1 sm:flex-wrap sm:overflow-visible sm:justify-center"
+      >
         {rangeOptions.map((value) => {
           const isActive = value === range;
           return (
@@ -931,6 +991,9 @@ export default function TeamPage({ params }: { params: { id: string } }) {
               key={`range-${value}`}
               type="button"
               onClick={() => setRange(value)}
+              ref={(node) => {
+                rangeRefs.current.set(String(value), node);
+              }}
               className={`px-2 py-0.5 text-[12px] rounded-md snap-start whitespace-nowrap text-center min-w-[82px] transition ${
                 isActive
                   ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
@@ -943,7 +1006,10 @@ export default function TeamPage({ params }: { params: { id: string } }) {
         })}
       </div>
 
-      <div className="flex flex-nowrap gap-2 mb-6 border-b pb-2 overflow-x-auto no-scrollbar snap-x snap-mandatory sm:flex-wrap sm:gap-4 sm:overflow-visible sm:justify-center">
+      <div
+        ref={tabListRef}
+        className="flex flex-nowrap gap-2 mb-6 border-b pb-2 overflow-x-auto no-scrollbar snap-x snap-mandatory -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap sm:gap-4 sm:overflow-visible sm:justify-center"
+      >
         {tabOptions.map((item) => {
           const isActive = item.key === tab;
           return (
@@ -951,6 +1017,9 @@ export default function TeamPage({ params }: { params: { id: string } }) {
               key={item.key}
               type="button"
               onClick={() => setTab(item.key)}
+              ref={(node) => {
+                tabRefs.current.set(item.key, node);
+              }}
               className={`px-2 pb-2 text-sm snap-start whitespace-nowrap text-center min-w-[96px] sm:min-w-[110px] transition ${
                 isActive ? "font-semibold text-white" : "text-white/60 blur-[0.8px] opacity-70"
               }`}
@@ -988,20 +1057,13 @@ export default function TeamPage({ params }: { params: { id: string } }) {
           overUnderMatchKeys={overUnderMatchKeys}
           overUnderHighlight={overUnderHighlight}
           showOpponentComparison={showOpponentComparison}
+          showOdds={showOdds}
+          fixtureId={effectiveNextMatch?.fixture?.id ?? null}
+          leagueId={league?.id ?? null}
+          season={league?.season ?? CURRENT_SEASON}
           cibleActive={cibleActive}
           filter={probabilityFilter}
           onFilterChange={setProbabilityFilter}
-        />
-      ) : tab === "odds" ? (
-        <OddsView
-          teamId={teamId}
-          nextOpponentId={nextOpponentId}
-          leagueId={league?.id ?? null}
-          season={league?.season ?? CURRENT_SEASON}
-          isTeamHome={isTeamHome}
-          range={effectiveRange}
-          cutoffDate={cutoffDate}
-          filter={probabilityFilter}
         />
       ) : tab === "confidence" ? (
         <ConfidenceView

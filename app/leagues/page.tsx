@@ -97,7 +97,7 @@ export default function LeaguesPage() {
           <input
             type="text"
             placeholder="Rechercher une ligue..."
-            className="w-full rounded-lg border border-white/20 bg-white/10 px-10 py-2 text-sm text-white placeholder:text-white/60 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-blue-400/60"
+            className="w-full rounded-lg border border-white/20 bg-white/10 px-10 py-2 text-sm text-white placeholder:text-white/60 focus:outline-none focus:ring-2 focus:ring-blue-400/60"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -127,17 +127,17 @@ export default function LeaguesPage() {
           {TOP_LEAGUES.map((l) => (
             <Card
               key={l.id}
-              className="flex flex-col items-center gap-4 text-center bg-white/5 border-white/10 text-white backdrop-blur-sm"
+              className="flex flex-col items-center gap-2 sm:gap-4 text-center bg-white/5 border-white/10 text-white backdrop-blur-sm !p-2 sm:!p-4"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={l.logo} className="h-16 w-16" alt={l.name} />
+              <img src={l.logo} className="h-10 w-10 sm:h-16 sm:w-16" alt={l.name} />
               <div>
-                <p className="text-lg font-semibold">{l.name}</p>
-                <p className="text-white/70 text-sm">{l.country}</p>
+                <p className="text-base sm:text-lg font-semibold">{l.name}</p>
+                <p className="text-white/70 text-xs sm:text-sm">{l.country}</p>
               </div>
               <Link
                 href={`/league/${l.id}`}
-                className="text-sky-300 text-sm font-medium hover:underline"
+                className="text-sky-300 text-xs sm:text-sm font-medium hover:underline"
               >
                 Voir la ligue →
               </Link>
@@ -160,24 +160,24 @@ export default function LeaguesPage() {
             {filteredLeagues.map((l) => (
               <Card
                 key={l.id}
-                className="flex items-center justify-between p-4 bg-white/5 border-white/10 text-white backdrop-blur-sm"
+                className="flex items-center justify-between bg-white/5 border-white/10 text-white backdrop-blur-sm !p-2 sm:!p-4"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 sm:gap-3">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={`https://media.api-sports.io/football/leagues/${l.id}.png`}
-                    className="h-6 w-6"
+                    className="h-5 w-5 sm:h-6 sm:w-6"
                     alt={l.name}
                   />
                   <div>
-                    <p className="text-sm font-semibold">{l.name}</p>
-                    <p className="text-xs text-white/70">{l.country}</p>
+                    <p className="text-xs sm:text-sm font-semibold">{l.name}</p>
+                    <p className="text-[10px] sm:text-xs text-white/70">{l.country}</p>
                   </div>
                 </div>
 
                 <Link
                   href={`/league/${l.id}`}
-                  className="text-sky-300 text-xs font-medium hover:underline"
+                  className="text-sky-300 text-[10px] sm:text-xs font-medium hover:underline"
                 >
                   Voir →
                 </Link>

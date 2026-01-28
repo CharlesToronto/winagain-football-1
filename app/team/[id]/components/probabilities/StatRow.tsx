@@ -40,6 +40,8 @@ export default function StatRow({
   highlight,
   selectionCategory,
   selectionLabel,
+  odd,
+  showOdd,
 }: any) {
   const isMobile = useMobileMode();
   const [showCount, setShowCount] = useState(false);
@@ -126,6 +128,11 @@ export default function StatRow({
         {percentOrange != null ? (
           <span className={`${orangeClass} ${percentBaseClass}`} onClick={handleToggle}>
             {percentOrange}
+          </span>
+        ) : null}
+        {showOdd ? (
+          <span className="text-pink-300 font-semibold tabular-nums">
+            {odd ?? "-"}
           </span>
         ) : null}
         {showTooltip ? (

@@ -141,15 +141,6 @@ function computeGoalAverages(fixtures: Fixture[]): GoalAverages {
   };
 }
 
-function OddsRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between text-sm py-1 px-2 -mx-2 rounded-md">
-      <span className="text-white/80">{label}</span>
-      <span className="font-semibold text-emerald-300">{value}</span>
-    </div>
-  );
-}
-
 function getFixtureTimestamp(fixture: Fixture) {
   const raw =
     fixture?.date_utc ?? fixture?.date ?? fixture?.fixture?.date ?? fixture?.timestamp ?? null;
@@ -200,19 +191,50 @@ function buildOverUnderMultipliers(reference: CalibrationMultipliers | null) {
   return reference.overUnder;
 }
 
-function OddsOverUnderCard({ odds }: { odds: { over: Record<string, string>; under: Record<string, string> } }) {
+function OddsOverUnderCard({
+  odds,
+  apiOdds,
+  bookmakerLabel,
+}: {
+  odds: { over: Record<string, string>; under: Record<string, string> };
+  apiOdds?: { over: Record<string, string>; under: Record<string, string> } | null;
+  bookmakerLabel?: string;
+}) {
   return (
     <div className="bg-white/5 rounded-xl p-6 shadow h-[20rem]">
       <h3 className="font-semibold mb-3">Over / Under</h3>
+      <div className="grid grid-cols-[1fr_auto_auto] items-center gap-3 text-[11px] text-white/50 mb-2 px-2">
+        <span />
+        <span>Stats</span>
+        <span>{bookmakerLabel ?? "10Bet"}</span>
+      </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1">
           {OVER_UNDER_LINES.map((line) => (
-            <OddsRow key={`over-${line}`} label={`+${line}`} value={odds.over[line] ?? "-"} />
+            <div
+              key={`over-${line}`}
+              className="grid grid-cols-[1fr_auto_auto] items-center gap-3 text-sm py-1 px-2 -mx-2 rounded-md"
+            >
+              <span className="text-white/80">{`+${line}`}</span>
+              <span className="font-semibold text-white/80">{odds.over[line] ?? "-"}</span>
+              <span className="font-semibold text-pink-300">
+                {apiOdds?.over?.[line] ?? "-"}
+              </span>
+            </div>
           ))}
         </div>
         <div className="space-y-1">
           {OVER_UNDER_LINES.map((line) => (
-            <OddsRow key={`under-${line}`} label={`-${line}`} value={odds.under[line] ?? "-"} />
+            <div
+              key={`under-${line}`}
+              className="grid grid-cols-[1fr_auto_auto] items-center gap-3 text-sm py-1 px-2 -mx-2 rounded-md"
+            >
+              <span className="text-white/80">{`-${line}`}</span>
+              <span className="font-semibold text-white/80">{odds.under[line] ?? "-"}</span>
+              <span className="font-semibold text-pink-300">
+                {apiOdds?.under?.[line] ?? "-"}
+              </span>
+            </div>
           ))}
         </div>
       </div>
@@ -220,14 +242,36 @@ function OddsOverUnderCard({ odds }: { odds: { over: Record<string, string>; und
   );
 }
 
-function OddsDoubleChanceCard({ odds }: { odds: Record<"1X" | "X2" | "12", string> }) {
+function OddsDoubleChanceCard({
+  odds,
+  apiOdds,
+  bookmakerLabel,
+}: {
+  odds: Record<"1X" | "X2" | "12", string>;
+  apiOdds?: Record<"1X" | "X2" | "12", string> | null;
+  bookmakerLabel?: string;
+}) {
   return (
     <div className="bg-white/5 rounded-xl p-6 shadow">
       <h3 className="font-semibold mb-3">Double chance</h3>
+      <div className="grid grid-cols-[1fr_auto_auto] items-center gap-3 text-[11px] text-white/50 mb-2 px-2">
+        <span />
+        <span>Stats</span>
+        <span>{bookmakerLabel ?? "10Bet"}</span>
+      </div>
       <div className="space-y-1">
-        <OddsRow label="1X" value={odds["1X"] ?? "-"} />
-        <OddsRow label="X2" value={odds["X2"] ?? "-"} />
-        <OddsRow label="12" value={odds["12"] ?? "-"} />
+        {(["1X", "X2", "12"] as const).map((label) => (
+          <div
+            key={label}
+            className="grid grid-cols-[1fr_auto_auto] items-center gap-3 text-sm py-1 px-2 -mx-2 rounded-md"
+          >
+            <span className="text-white/80">{label}</span>
+            <span className="font-semibold text-white/80">{odds[label] ?? "-"}</span>
+            <span className="font-semibold text-pink-300">
+              {apiOdds?.[label] ?? "-"}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -236,6 +280,7 @@ function OddsDoubleChanceCard({ odds }: { odds: Record<"1X" | "X2" | "12", strin
 export default function OddsView({
   teamId,
   nextOpponentId,
+  fixtureId,
   leagueId,
   season,
   isTeamHome,
@@ -245,6 +290,7 @@ export default function OddsView({
 }: {
   teamId?: number | null;
   nextOpponentId?: number | null;
+  fixtureId?: number | null;
   leagueId?: number | null;
   season?: number | null;
   isTeamHome?: boolean | null;
@@ -256,6 +302,13 @@ export default function OddsView({
   const [opponentFixtures, setOpponentFixtures] = useState<Fixture[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [apiOdds, setApiOdds] = useState<{
+    overUnder: { over: Record<string, string>; under: Record<string, string> };
+    doubleChance: Record<"1X" | "X2" | "12", string>;
+    bookmaker?: { id?: number | null; name?: string | null } | null;
+  } | null>(null);
+  const [apiOddsLoading, setApiOddsLoading] = useState(false);
+  const [apiOddsError, setApiOddsError] = useState<string | null>(null);
   const [calibration, setCalibration] = useState<CalibrationMultipliers | null>(null);
   const [calibrationLoading, setCalibrationLoading] = useState(false);
   const { engines } = getProbabilityEngines();
@@ -264,6 +317,53 @@ export default function OddsView({
     () => buildOverUnderMultipliers(calibration),
     [calibration]
   );
+
+  useEffect(() => {
+    let active = true;
+    if (!fixtureId || !leagueId || !season) {
+      setApiOdds(null);
+      setApiOddsError("Aucune cote disponible.");
+      setApiOddsLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+    setApiOddsLoading(true);
+    setApiOddsError(null);
+    fetch(
+      `/api/odds/fixture?fixture=${fixtureId}&league=${leagueId}&season=${season}&bookmaker=1`
+    )
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(`Odds API error: ${res.status}`);
+        }
+        return res.json();
+      })
+      .then((data) => {
+        if (!active) return;
+        if (!data?.odds) {
+          setApiOdds(null);
+          return;
+        }
+        setApiOdds({
+          ...data.odds,
+          bookmaker: data.bookmaker ?? null,
+        });
+      })
+      .catch(() => {
+        if (!active) return;
+        setApiOdds(null);
+        setApiOddsError("Impossible de charger les cotes 10Bet.");
+      })
+      .finally(() => {
+        if (!active) return;
+        setApiOddsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [fixtureId, leagueId, season]);
 
   useEffect(() => {
     let active = true;
@@ -499,21 +599,38 @@ export default function OddsView({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="text-sm text-white/70">
           {loading
-            ? "Chargement des cotes..."
+            ? "Chargement des stats..."
             : error
               ? error
               : calibrationLoading
                 ? "Calibrage Bet365..."
-                : "Cotes du match"}
+                : "Stats + cotes du match"}
+        </div>
+        <div className="text-xs text-white/50">
+          {apiOddsLoading
+            ? "Cotes 10Bet..."
+            : apiOddsError
+              ? apiOddsError
+              : apiOdds?.bookmaker?.name
+                ? `Bookmaker : ${apiOdds.bookmaker.name}`
+                : "Bookmaker : 10Bet"}
         </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <OddsOverUnderCard odds={overUnderOdds} />
-        <OddsDoubleChanceCard odds={doubleChanceOdds} />
+        <OddsOverUnderCard
+          odds={overUnderOdds}
+          apiOdds={apiOdds?.overUnder ?? null}
+          bookmakerLabel={apiOdds?.bookmaker?.name ?? "10Bet"}
+        />
+        <OddsDoubleChanceCard
+          odds={doubleChanceOdds}
+          apiOdds={apiOdds?.doubleChance ?? null}
+          bookmakerLabel={apiOdds?.bookmaker?.name ?? "10Bet"}
+        />
       </div>
     </div>
   );

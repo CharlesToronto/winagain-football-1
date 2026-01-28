@@ -4,10 +4,20 @@ export default function CardSeries({
   data,
   streaks,
   opponentData,
+  showOdds,
+  odds,
 }: {
   data: any;
   streaks: any;
   opponentData?: any;
+  showOdds?: boolean;
+  odds?: {
+    btts?: { yes: string; no: string } | null;
+    cleanSheet?: {
+      home: { yes: string; no: string };
+      away: { yes: string; no: string };
+    } | null;
+  };
 }) {
   const statsEngine = data;
   const resolvedStreaks = data?.streaks ?? streaks ?? {};
@@ -41,11 +51,11 @@ export default function CardSeries({
         <StatRow label="Série de victoires" count={`(${win.raw}/${total})`} percentGreen={`${win.percent}%`} percentOrange={showOpponent ? `${opponentWin.percent}%` : undefined} percentBlue={resolvedStreaks?.win?.active ? `${resolvedStreaks.win.percent}%` : "–"} />
         <StatRow label="Série de défaites" count={`(${lose.raw}/${total})`} percentGreen={`${lose.percent}%`} percentOrange={showOpponent ? `${opponentLose.percent}%` : undefined} percentBlue={resolvedStreaks?.lose?.active ? `${resolvedStreaks.lose.percent}%` : "–"} />
         <StatRow label="Série de nuls" count={`(${draw.raw}/${total})`} percentGreen={`${draw.percent}%`} percentOrange={showOpponent ? `${opponentDraw.percent}%` : undefined} percentBlue={resolvedStreaks?.draw?.active ? `${resolvedStreaks.draw.percent}%` : "–"} />
-        <StatRow label="Série BTS" count={`(${btts.raw}/${total})`} percentGreen={`${btts.percent}%`} percentOrange={showOpponent ? `${opponentBtts.percent}%` : undefined} percentBlue={resolvedStreaks?.btts?.active ? `${resolvedStreaks.btts.percent}%` : "–"} />
+        <StatRow label="Série BTS" count={`(${btts.raw}/${total})`} percentGreen={`${btts.percent}%`} percentOrange={showOpponent ? `${opponentBtts.percent}%` : undefined} percentBlue={resolvedStreaks?.btts?.active ? `${resolvedStreaks.btts.percent}%` : "–"} showOdd={showOdds} odd={odds?.btts?.yes} />
         <StatRow label="Série +2.5" count={`(${over25.raw}/${total})`} percentGreen={`${over25.percent}%`} percentOrange={showOpponent ? `${opponentOver25.percent}%` : undefined} percentBlue={resolvedStreaks?.over?.["2.5"]?.active ? `${resolvedStreaks.over["2.5"].percent}%` : "–"} />
         <StatRow label="Série -2.5" count={`(${under25.raw}/${total})`} percentGreen={`${under25.percent}%`} percentOrange={showOpponent ? `${opponentUnder25.percent}%` : undefined} percentBlue={resolvedStreaks?.under?.["2.5"]?.active ? `${resolvedStreaks.under["2.5"].percent}%` : "–"} />
-        <StatRow label="Série clean sheet home" count={`(${cleanHome.raw}/${total})`} percentGreen={`${cleanHome.percent}%`} percentOrange={showOpponent ? `${opponentCleanHome.percent}%` : undefined} percentBlue={resolvedStreaks?.clean_home?.active ? `${resolvedStreaks.clean_home.percent}%` : "–"} />
-        <StatRow label="Série clean sheet away" count={`(${cleanAway.raw}/${total})`} percentGreen={`${cleanAway.percent}%`} percentOrange={showOpponent ? `${opponentCleanAway.percent}%` : undefined} percentBlue={resolvedStreaks?.clean_away?.active ? `${resolvedStreaks.clean_away.percent}%` : "–"} />
+        <StatRow label="Série clean sheet home" count={`(${cleanHome.raw}/${total})`} percentGreen={`${cleanHome.percent}%`} percentOrange={showOpponent ? `${opponentCleanHome.percent}%` : undefined} percentBlue={resolvedStreaks?.clean_home?.active ? `${resolvedStreaks.clean_home.percent}%` : "–"} showOdd={showOdds} odd={odds?.cleanSheet?.home?.yes} />
+        <StatRow label="Série clean sheet away" count={`(${cleanAway.raw}/${total})`} percentGreen={`${cleanAway.percent}%`} percentOrange={showOpponent ? `${opponentCleanAway.percent}%` : undefined} percentBlue={resolvedStreaks?.clean_away?.active ? `${resolvedStreaks.clean_away.percent}%` : "–"} showOdd={showOdds} odd={odds?.cleanSheet?.away?.yes} />
       </div>
     </div>
   );

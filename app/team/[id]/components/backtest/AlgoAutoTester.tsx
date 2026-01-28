@@ -61,25 +61,31 @@ function createWeightProfile(buckets: number, mode: "soft" | "medium" | "hard") 
   });
 }
 
-function computeStats(
-  fixtures: BacktestFixture[],
+function computeStatsBySeason(
+  seasons: number[],
+  fixturesBySeason: Record<number, BacktestFixture[]>,
   teamId: number | null,
   settings: AlgoSettings
 ): ResultStats {
-  const result = computeBacktest(fixtures, teamId, settings);
-  const allPicks = result.picks;
-  const filtered = allPicks.filter((pick) => pick.probability >= settings.threshold);
-  const hits = filtered.filter((pick) => pick.hit).length;
-  const picks = filtered.length;
+  let picks = 0;
+  let hits = 0;
+  let evaluated = 0;
+
+  seasons.forEach((season) => {
+    const seasonFixtures = fixturesBySeason[season] ?? [];
+    if (!seasonFixtures.length) return;
+    const result = computeBacktest(seasonFixtures, teamId, settings);
+    const allPicks = result.picks;
+    const filtered = allPicks.filter((pick) => pick.probability >= settings.threshold);
+    const seasonHits = filtered.filter((pick) => pick.hit).length;
+    picks += filtered.length;
+    hits += seasonHits;
+    evaluated += allPicks.length;
+  });
+
   const hitRate = picks ? hits / picks : 0;
-  const coverage = allPicks.length ? picks / allPicks.length : 0;
-  return {
-    picks,
-    hits,
-    hitRate,
-    coverage,
-    evaluated: allPicks.length,
-  };
+  const coverage = evaluated ? picks / evaluated : 0;
+  return { picks, hits, hitRate, coverage, evaluated };
 }
 
 function buildCandidateSettings(count: number, lineSets: MarketLine[][]) {
@@ -170,7 +176,7 @@ export default function AlgoAutoTester({
   onClose?: () => void;
 }) {
   const { updateGlobalSettings, saveTeamSettings } = useTeamAlgoSettings(teamId);
-  const [seasonMode, setSeasonMode] = useState<SeasonMode>("current");
+  const [seasonMode, setSeasonMode] = useState<SeasonMode>("both");
   const [testsCount, setTestsCount] = useState(30);
   const [resultLimit, setResultLimit] = useState(20);
   const [minCoverage, setMinCoverage] = useState(0.4);
@@ -304,7 +310,7 @@ export default function AlgoAutoTester({
       const computed = candidates.map((settings, index) => ({
         id: `auto-${index}`,
         settings,
-        stats: computeStats(fixtures, teamId, settings),
+        stats: computeStatsBySeason(seasons, fixturesBySeason, teamId, settings),
       }));
       const filtered = computed.filter(
         (row) => row.stats.hitRate >= 0.8 && row.stats.hitRate <= 1
@@ -372,7 +378,7 @@ export default function AlgoAutoTester({
         const computed = candidates.map((settings, index) => ({
           id: `full-${index}`,
           settings,
-          stats: computeStats(fixtures, teamId, settings),
+          stats: computeStatsBySeason(seasons, fixturesBySeason, teamId, settings),
         }));
         const filtered = computed.filter(
           (row) => row.stats.hitRate >= 0.8 && row.stats.hitRate <= 1

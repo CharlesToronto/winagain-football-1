@@ -83,25 +83,31 @@ function normalizeRow(row: ComparatorRow): AlgoSettings {
   });
 }
 
-function computeStats(
-  fixtures: BacktestFixture[],
+function computeStatsBySeason(
+  seasons: number[],
+  fixturesBySeason: Record<number, BacktestFixture[]>,
   teamId: number | null,
   settings: AlgoSettings
 ): ResultStats {
-  const result = computeBacktest(fixtures, teamId, settings);
-  const allPicks = result.picks;
-  const filtered = allPicks.filter((pick) => pick.probability >= settings.threshold);
-  const hits = filtered.filter((pick) => pick.hit).length;
-  const picks = filtered.length;
+  let picks = 0;
+  let hits = 0;
+  let evaluated = 0;
+
+  seasons.forEach((season) => {
+    const seasonFixtures = fixturesBySeason[season] ?? [];
+    if (!seasonFixtures.length) return;
+    const result = computeBacktest(seasonFixtures, teamId, settings);
+    const allPicks = result.picks;
+    const filtered = allPicks.filter((pick) => pick.probability >= settings.threshold);
+    const seasonHits = filtered.filter((pick) => pick.hit).length;
+    picks += filtered.length;
+    hits += seasonHits;
+    evaluated += allPicks.length;
+  });
+
   const hitRate = picks ? hits / picks : 0;
-  const coverage = allPicks.length ? picks / allPicks.length : 0;
-  return {
-    picks,
-    hits,
-    hitRate,
-    coverage,
-    evaluated: allPicks.length,
-  };
+  const coverage = evaluated ? picks / evaluated : 0;
+  return { picks, hits, hitRate, coverage, evaluated };
 }
 
 export default function AlgoComparator({
@@ -216,7 +222,7 @@ export default function AlgoComparator({
         prev.map((row) => {
           if (row.id !== rowId) return row;
           const normalized = normalizeRow(row);
-          const stats = computeStats(fixtures, teamId, normalized);
+          const stats = computeStatsBySeason(seasons, fixturesBySeason, teamId, normalized);
           computedStats = stats;
           computedSettings = normalized;
           return { ...row, running: false, result: stats };
@@ -251,7 +257,7 @@ export default function AlgoComparator({
       setRows((prev) =>
         prev.map((row) => {
           const normalized = normalizeRow(row);
-          const stats = computeStats(fixtures, teamId, normalized);
+          const stats = computeStatsBySeason(seasons, fixturesBySeason, teamId, normalized);
           computedResults.push({ rowId: row.id, settings: normalized, stats });
           return { ...row, running: false, result: stats };
         })

@@ -26,6 +26,8 @@ export default function CardResultSimple({
   opponentFixtures = [],
   showOpponentComparison = false,
   mode = "FT",
+  showOdds,
+  odds,
 }: {
   data?: any;
   streaks?: any;
@@ -33,6 +35,14 @@ export default function CardResultSimple({
   opponentFixtures?: any[];
   showOpponentComparison?: boolean;
   mode?: Mode;
+  showOdds?: boolean;
+  odds?: {
+    btts?: { yes: string; no: string } | null;
+    cleanSheet?: {
+      home: { yes: string; no: string };
+      away: { yes: string; no: string };
+    } | null;
+  };
 }) {
   const [location, setLocation] = useState<Location>("all");
   const engines = useMemo(() => getProbabilityEngines(), []);
@@ -167,6 +177,8 @@ export default function CardResultSimple({
               : percentFallback
           }
           selectionCategory={scoringCategory}
+          showOdd={showOdds}
+          odd={odds?.btts?.yes}
         />
         <StatRow
           label="Clean Sheet Home"
@@ -179,6 +191,8 @@ export default function CardResultSimple({
               : percentFallback
           }
           selectionCategory={scoringCategory}
+          showOdd={showOdds}
+          odd={odds?.cleanSheet?.home?.yes}
         />
         <StatRow
           label="Clean Sheet Away"
@@ -191,6 +205,8 @@ export default function CardResultSimple({
               : percentFallback
           }
           selectionCategory={scoringCategory}
+          showOdd={showOdds}
+          odd={odds?.cleanSheet?.away?.yes}
         />
       </div>
     </div>

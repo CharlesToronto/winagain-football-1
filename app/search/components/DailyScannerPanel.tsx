@@ -39,6 +39,8 @@ const LINE_SETS: MarketLine[][] = [
 const VARIANT_COUNT = 30;
 const HIT_MIN = 0.8;
 const PICKS_MIN = 0.33;
+const MIN_TOTAL_PICKS = 25;
+const MIN_ODDS = 1.18;
 const SETTINGS_STORAGE_PREFIX = "winagain:algo-settings:team:";
 const SCAN_STORAGE_KEY = "winagain:daily-scanner:last";
 const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
@@ -75,6 +77,8 @@ type ScanResult = {
   competitionId: number | null;
   competitionName: string | null;
   competitionCountry: string | null;
+  competitionLogo: string | null;
+  season: number | null;
   dateUtc: string | null;
   homeId: number | null;
   awayId: number | null;
@@ -92,6 +96,9 @@ type ScanResult = {
   picks: number;
   evaluated: number;
   threshold: number;
+  odd: number | null;
+  meetsOdds: boolean;
+  meetsCriteria: boolean;
 };
 
 type NextMatchInfo = {
@@ -126,6 +133,51 @@ const BASELINE_AWAY = 1.15;
 
 function lineKey(line: MarketLine) {
   return typeof line === "number" ? line.toString() : line;
+}
+
+type FixtureOdds = {
+  overUnder: { over: Record<string, string>; under: Record<string, string> };
+  doubleChance: Record<"1X" | "X2" | "12", string>;
+};
+
+function parseOddValue(value?: string | null) {
+  if (!value) return null;
+  const parsed = Number.parseFloat(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function resolveOddForPick(pick: string, odds?: FixtureOdds | null) {
+  if (!odds || !pick) return null;
+  const trimmed = pick.trim();
+  if (trimmed === "1X" || trimmed === "X2" || trimmed === "12") {
+    return parseOddValue(odds.doubleChance?.[trimmed as "1X" | "X2" | "12"]);
+  }
+  const match = trimmed.match(/^(Over|Under)\s+([0-9.]+)$/i);
+  if (!match) return null;
+  const line = match[2];
+  const key = line;
+  if (match[1].toLowerCase() === "over") {
+    return parseOddValue(odds.overUnder?.over?.[key]);
+  }
+  return parseOddValue(odds.overUnder?.under?.[key]);
+}
+
+async function fetchFixtureOdds(
+  fixtureId: number,
+  leagueId: number | null,
+  season: number | null
+): Promise<FixtureOdds | null> {
+  if (!Number.isFinite(fixtureId) || !leagueId || !season) return null;
+  try {
+    const res = await fetch(
+      `/api/odds/fixture?fixture=${fixtureId}&league=${leagueId}&season=${season}&bookmaker=1`
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.odds ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -348,6 +400,7 @@ export default function DailyScannerPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastScanInfo, setLastScanInfo] = useState<string | null>(null);
+  const [progress, setProgress] = useState(0);
   const cacheRef = useRef<Map<string, TeamEval>>(new Map());
 
   const timeZone = useMemo(
@@ -386,6 +439,22 @@ export default function DailyScannerPanel() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!loading) {
+      setProgress(0);
+      return;
+    }
+    setProgress(5);
+    const timer = setInterval(() => {
+      setProgress((prev) => {
+        if (prev >= 96) return prev;
+        const next = prev < 80 ? prev + 4 : prev + 1;
+        return Math.min(96, next);
+      });
+    }, 250);
+    return () => clearInterval(timer);
+  }, [loading]);
+
   const computeTeamEval = (
     fixtures: BacktestFixture[],
     teamId: number,
@@ -420,7 +489,7 @@ export default function DailyScannerPanel() {
     fixtures: BacktestFixture[],
     teamId: number,
     baseSettings: AlgoSettings
-  ) => {
+  ): { evalResult: TeamEval; meetsCriteria: boolean } | null => {
     const candidates = [
       baseSettings,
       ...candidatePool.filter((item) => item !== baseSettings),
@@ -432,19 +501,29 @@ export default function DailyScannerPanel() {
     const list = Array.from(unique.values());
 
     const eligible: TeamEval[] = [];
+    const evaluated: TeamEval[] = [];
     list.forEach((settings) => {
       const evalResult = computeTeamEval(fixtures, teamId, settings);
       if (!evalResult) return;
-      if (evalResult.stats.hitRate >= HIT_MIN && evalResult.stats.coverage >= PICKS_MIN) {
+      evaluated.push(evalResult);
+      if (
+        evalResult.stats.hitRate >= HIT_MIN &&
+        evalResult.stats.coverage >= PICKS_MIN &&
+        evalResult.stats.picks >= MIN_TOTAL_PICKS
+      ) {
         eligible.push(evalResult);
       }
     });
-    if (!eligible.length) return null;
-    return eligible.sort((a, b) => {
+    const rank = (a: TeamEval, b: TeamEval) => {
       if (b.stats.picks !== a.stats.picks) return b.stats.picks - a.stats.picks;
       if (b.stats.hitRate !== a.stats.hitRate) return b.stats.hitRate - a.stats.hitRate;
       return b.stats.coverage - a.stats.coverage;
-    })[0];
+    };
+    if (eligible.length) {
+      return { evalResult: eligible.sort(rank)[0], meetsCriteria: true };
+    }
+    if (!evaluated.length) return null;
+    return { evalResult: evaluated.sort(rank)[0], meetsCriteria: false };
   };
 
   const runScan = async () => {
@@ -538,24 +617,21 @@ export default function DailyScannerPanel() {
 
       const competitionNameMap = new Map<number, string>();
       const competitionCountryMap = new Map<number, string>();
+      const competitionLogoMap = new Map<number, string>();
       if (leagueIds.length) {
         try {
-          const response = await fetch(
-            `/api/competitions/countries?ids=${leagueIds.join(",")}`
-          );
-          if (response.ok) {
-            const data = await response.json();
-            const items = Array.isArray(data?.items) ? data.items : [];
-            items.forEach((row: any) => {
-              const id = Number(row?.id);
-              if (!Number.isFinite(id)) return;
-              const name = row?.name ? String(row.name) : `Competition ${id}`;
-              competitionNameMap.set(id, name);
-              if (row?.country) {
-                competitionCountryMap.set(id, String(row.country));
-              }
-            });
-          }
+          const { data: competitions } = await supabaseBrowser
+            .from("competitions")
+            .select("id,name,country,logo")
+            .in("id", leagueIds);
+          (competitions ?? []).forEach((row: any) => {
+            const id = Number(row?.id);
+            if (!Number.isFinite(id)) return;
+            const name = row?.name ? String(row.name) : `Competition ${id}`;
+            competitionNameMap.set(id, name);
+            if (row?.country) competitionCountryMap.set(id, String(row.country));
+            if (row?.logo) competitionLogoMap.set(id, String(row.logo));
+          });
         } catch {
           // Ignore API errors and fallback to generic labels
         }
@@ -597,7 +673,10 @@ export default function DailyScannerPanel() {
         teamSettingsMap.set(teamId, settings);
       });
 
-      const bestSettingsCache = new Map<string, TeamEval | null>();
+      const bestSettingsCache = new Map<
+        string,
+        { evalResult: TeamEval; meetsCriteria: boolean } | null
+      >();
       const autoSavedTeams = new Set<number>();
       const output: ScanResult[] = [];
 
@@ -622,10 +701,14 @@ export default function DailyScannerPanel() {
           const baseSettings = teamSettingsMap.get(teamId) ?? DEFAULT_ALGO_SETTINGS;
 
           const cacheKey = `${leagueId}:${teamId}`;
-          let evalResult = bestSettingsCache.get(cacheKey) ?? null;
+          let cached = bestSettingsCache.get(cacheKey) ?? null;
+          let evalResult = cached?.evalResult ?? null;
+          let meetsCriteria = cached?.meetsCriteria ?? true;
           if (!bestSettingsCache.has(cacheKey)) {
-            evalResult = findBestSettings(leagueFixtures, teamId, baseSettings);
-            bestSettingsCache.set(cacheKey, evalResult);
+            const best = findBestSettings(leagueFixtures, teamId, baseSettings);
+            evalResult = best?.evalResult ?? null;
+            meetsCriteria = best?.meetsCriteria ?? true;
+            bestSettingsCache.set(cacheKey, best);
           }
           if (!evalResult) return;
 
@@ -661,6 +744,8 @@ export default function DailyScannerPanel() {
             competitionId: Number.isFinite(leagueId) ? leagueId : null,
             competitionName: competitionNameMap.get(leagueId) ?? null,
             competitionCountry: competitionCountryMap.get(leagueId) ?? null,
+            competitionLogo: competitionLogoMap.get(leagueId) ?? null,
+            season: fixture.season ?? null,
             dateUtc: fixture.date_utc ?? null,
             homeId: fixture.home?.id ?? null,
             awayId: fixture.away?.id ?? null,
@@ -678,6 +763,9 @@ export default function DailyScannerPanel() {
             picks: evalResult.stats.picks,
             evaluated: evalResult.stats.evaluated,
             threshold: evalResult.settings.threshold,
+            odd: null,
+            meetsOdds: false,
+            meetsCriteria,
           });
         });
       });
@@ -696,13 +784,32 @@ export default function DailyScannerPanel() {
         return true;
       });
 
-      setResults(filteredOutput);
+      const oddsCache = new Map<number, FixtureOdds | null>();
+      const enrichedOutput = await Promise.all(
+        filteredOutput.map(async (row) => {
+          let odds = oddsCache.get(row.fixtureId) ?? null;
+          if (!oddsCache.has(row.fixtureId)) {
+            odds = await fetchFixtureOdds(row.fixtureId, row.competitionId, row.season);
+            oddsCache.set(row.fixtureId, odds ?? null);
+          }
+          const oddValue = resolveOddForPick(row.pick, odds);
+          const meetsOdds = oddValue != null && oddValue >= MIN_ODDS;
+          return {
+            ...row,
+            odd: oddValue,
+            meetsOdds,
+            meetsCriteria: row.meetsCriteria && meetsOdds,
+          };
+        })
+      );
+
+      setResults(enrichedOutput);
       if (typeof window !== "undefined") {
         try {
           window.localStorage.setItem(
             SCAN_STORAGE_KEY,
             JSON.stringify({
-              results: filteredOutput,
+              results: enrichedOutput,
               lastScanInfo: `${fixtures.length} match(s) analysé(s) • ${filteredOutput.length} match(s) retenu(s) • ${totalEvaluations} évaluations`,
             })
           );
@@ -749,28 +856,41 @@ export default function DailyScannerPanel() {
     return date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
   };
 
+  const formatDateLabel = (label: string) =>
+    label ? `${label.charAt(0).toUpperCase()}${label.slice(1)}` : label;
+
   return (
     <div className="w-full space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      {loading ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/70" />
+          <div className="relative w-full max-w-sm rounded-xl border border-white/10 bg-white/10 backdrop-blur-md shadow-lg p-4">
+            <div className="text-sm font-semibold text-white">Recherche en cours...</div>
+            <div className="mt-3 h-2 w-full rounded-full bg-white/10 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-green-400 via-emerald-400 to-lime-400 transition-all"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <div className="mt-2 text-[11px] text-white/60">{progress}%</div>
+          </div>
+        </div>
+      ) : null}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <p className="text-sm text-white/70">Scanner automatique</p>
-          <h2 className="text-2xl font-semibold">Daily Scanner</h2>
           <p className="text-xs text-white/50">
-            {todayLabel} + {tomorrowLabel} • Heure locale {timeZone}
+            {formatDateLabel(todayLabel)} + {formatDateLabel(tomorrowLabel)} • Heure locale{" "}
+            {timeZone}
           </p>
         </div>
         <button
           type="button"
           onClick={runScan}
-          className="px-3 py-1 rounded-lg text-sm bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white transition hover:from-green-400 hover:via-emerald-400 hover:to-lime-400"
+          className="self-center md:self-auto px-3 py-1 rounded-lg text-sm bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white transition hover:from-green-400 hover:via-emerald-400 hover:to-lime-400"
           disabled={loading}
         >
-          {loading ? "Scan en cours..." : "Lancer le scan"}
+          {loading ? "Scan en cours..." : "Lancer une recherche"}
         </button>
-      </div>
-
-      <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-white/70">
-        Critères : Hit ≥ 80% • Picks ≥ 33% (sur 2 saisons) • Réglages par équipe + variantes.
       </div>
 
       {error ? (
@@ -785,12 +905,12 @@ export default function DailyScannerPanel() {
 
       {results.length === 0 && !loading ? (
         <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-sm text-white/60">
-          Aucun match retenu pour le moment.
+          Lancer une recherche pour trouver les meilleurs opportunités
         </div>
       ) : null}
 
       {results.length > 0 ? (
-        <div className="space-y-5">
+        <div className="space-y-3 -mx-4 px-2 md:mx-0 md:px-0">
           {Array.from(
             results
               .reduce((map, row) => {
@@ -798,36 +918,76 @@ export default function DailyScannerPanel() {
                 if (!map.has(key)) {
                   map.set(key, {
                     id: key,
-                  name: row.competitionName ?? `Competition ${row.competitionId ?? "-"}`,
-                  country: row.competitionCountry ?? null,
-                  items: [] as ScanResult[],
-                });
-              }
-              map.get(key)!.items.push(row);
-              return map;
-            }, new Map<string, { id: string; name: string; country: string | null; items: ScanResult[] }>())
+                    name: row.competitionName ?? `Competition ${row.competitionId ?? "-"}`,
+                    country: row.competitionCountry ?? null,
+                    logo: row.competitionLogo ?? null,
+                    items: [] as ScanResult[],
+                  });
+                }
+                map.get(key)!.items.push(row);
+                return map;
+              }, new Map<string, { id: string; name: string; country: string | null; logo: string | null; items: ScanResult[] }>())
               .values()
           )
             .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
             .map((group) => (
               <details
                 key={group.id}
-                className="rounded-xl border border-white/10 bg-white/5 p-4"
+                className="group -mx-4 px-2 rounded-xl bg-transparent"
                 open
               >
-                <summary className="cursor-pointer select-none text-xs uppercase tracking-wide text-blue-300">
-                  {(group.country ?? "Pays inconnu") + " - " + group.name} •{" "}
-                  {group.items.length} match(s)
+                <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none rounded-xl border border-white/10 group-open:border-transparent text-[11px]">
+                  {group.logo ? (
+                    <img
+                      src={group.logo}
+                      alt={group.name ?? "Competition"}
+                      className="w-8 h-8 rounded-md object-contain bg-white/10"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 rounded-md bg-white/10 border border-white/10" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold truncate text-[12px]">
+                      {[group.name, group.country].filter(Boolean).join(" - ") || "Compétition"}
+                    </div>
+                    <div className="text-[10px] text-white/60 flex items-center gap-2">
+                      <span>{group.items.length} matchs</span>
+                    </div>
+                  </div>
+                  <span className="text-white/50 transition-transform group-open:rotate-180 animate-pulse group-open:animate-none motion-reduce:animate-none">
+                    <svg viewBox="0 0 24 24" width={16} height={16} aria-hidden>
+                      <path
+                        d="M6 9l6 6 6-6"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </span>
                 </summary>
-                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
                   {group.items.map((row) => {
                     const targetHref = row.homeId ? `/team/${row.homeId}` : null;
+                    const hits = row.picks
+                      ? Math.min(row.picks, Math.max(0, Math.round(row.hitRate * row.picks)))
+                      : 0;
+                    const hitPercent = row.picks ? (hits / row.picks) * 100 : 0;
+                    const oddsOk =
+                      row.meetsOdds ?? (row.odd != null ? row.odd >= MIN_ODDS : false);
+                    const criteriaOk =
+                      (row.meetsCriteria ??
+                        (row.hitRate >= HIT_MIN &&
+                          row.coverage >= PICKS_MIN &&
+                          row.picks >= MIN_TOTAL_PICKS)) &&
+                      oddsOk;
                     const Wrapper = targetHref ? Link : "div";
                     return (
                       <Wrapper
                         key={`${row.fixtureId}-${row.teamId}-${row.pick}`}
                         href={targetHref ?? undefined}
-                        className={`rounded-xl border border-white/10 bg-white/5 p-4 flex flex-col gap-2 ${
+                        className={`rounded-lg border border-white/10 bg-white/5 px-3 py-2 flex flex-col gap-2 ${
                           targetHref
                             ? "hover:border-white/30 hover:bg-white/10 transition cursor-pointer"
                             : ""
@@ -835,46 +995,55 @@ export default function DailyScannerPanel() {
                       >
                         <div className="flex items-center justify-between text-xs text-white/60">
                           <span>{formatTime(row.dateUtc)}</span>
-                          <span>Team {row.side === "home" ? "Home" : "Away"}</span>
                         </div>
-                        <div className="flex items-center gap-3">
-                          {row.homeLogo ? (
-                            <img
-                              src={row.homeLogo}
-                              alt={row.homeName ?? "Home"}
-                              className="w-6 h-6 object-contain"
-                            />
-                          ) : (
-                            <div className="w-6 h-6 rounded-full bg-white/10" />
-                          )}
-                          <div className="text-sm font-semibold">
-                            {row.homeName ?? "Home"} vs {row.awayName ?? "Away"}
+                        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {row.homeLogo ? (
+                              <img
+                                src={row.homeLogo}
+                                alt={row.homeName ?? "Home"}
+                                className="w-6 h-6 object-contain"
+                              />
+                            ) : (
+                              <div className="w-6 h-6 rounded-full bg-white/10" />
+                            )}
+                            <span className="text-sm font-semibold truncate">
+                              {row.homeName ?? "Home"}
+                            </span>
                           </div>
-                          {row.awayLogo ? (
-                            <img
-                              src={row.awayLogo}
-                              alt={row.awayName ?? "Away"}
-                              className="w-6 h-6 object-contain"
-                            />
-                          ) : (
-                            <div className="w-6 h-6 rounded-full bg-white/10" />
-                          )}
+                          <div className="text-xs text-blue-300 text-center">VS</div>
+                          <div className="flex items-center justify-end gap-2 min-w-0 text-right">
+                            <span className="text-sm font-semibold truncate">
+                              {row.awayName ?? "Away"}
+                            </span>
+                            {row.awayLogo ? (
+                              <img
+                                src={row.awayLogo}
+                                alt={row.awayName ?? "Away"}
+                                className="w-6 h-6 object-contain"
+                              />
+                            ) : (
+                              <div className="w-6 h-6 rounded-full bg-white/10" />
+                            )}
+                          </div>
                         </div>
-                        <div className="text-xs text-white/60">
-                          Réglage équipe : {row.teamName ?? "Team"} • Seuil{" "}
-                          {row.threshold.toFixed(2)}
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2 text-sm">
-                          <span className="px-2 py-0.5 rounded-md border border-pink-400/40 bg-pink-500/20 text-pink-200">
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                          <span
+                            className={`px-2 py-0.5 rounded-md border ${
+                              criteriaOk
+                                ? "border-pink-400/40 bg-pink-500/20 text-pink-200"
+                                : "border-amber-300/50 bg-amber-400/20 text-amber-200"
+                            }`}
+                          >
                             Pick {row.pick}
                           </span>
                           <span className="text-pink-200">
                             {(row.probability * 100).toFixed(1)}%
                           </span>
-                        </div>
-                        <div className="text-xs text-white/60">
-                          Hit {(row.hitRate * 100).toFixed(1)}% • Coverage{" "}
-                          {(row.coverage * 100).toFixed(1)}% • {row.picks}/{row.evaluated}
+                          <span className="text-xs text-white/60 text-right ml-auto">
+                            Hit {hitPercent.toFixed(1)}% • {hits}/{row.picks} • Odd{" "}
+                            {row.odd != null ? row.odd.toFixed(2) : "-"}
+                          </span>
                         </div>
                       </Wrapper>
                     );
@@ -884,6 +1053,11 @@ export default function DailyScannerPanel() {
             ))}
         </div>
       ) : null}
+
+      <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-white/70 blur-[2px] transition hover:blur-none">
+        Critères : Hit ≥ 80% • Coverage ≥ 33% • Minimum 25 picks (sur 2 saisons) • Cote ≥ 1.18 •
+        Réglages par équipe + variantes.
+      </div>
     </div>
   );
 }

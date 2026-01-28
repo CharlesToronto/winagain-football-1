@@ -318,10 +318,17 @@ export default function BacktestView({
     };
   }, [leagueId, seasons, fixturesBySeason]);
 
-  const result = useMemo(
-    () => computeBacktest(fixtures, teamId, settings),
-    [fixtures, teamId, settings]
-  );
+  const resultPicks = useMemo(() => {
+    if (!teamId) return [] as BacktestPick[];
+    if (seasonMode !== "both") {
+      return computeBacktest(fixtures, teamId, settings).picks;
+    }
+    return seasons.flatMap((season) => {
+      const seasonFixtures = fixturesBySeason[season] ?? [];
+      if (!seasonFixtures.length) return [];
+      return computeBacktest(seasonFixtures, teamId, settings).picks;
+    });
+  }, [fixtures, fixturesBySeason, seasons, seasonMode, teamId, settings]);
   const nextMatchInfo = useMemo(() => buildNextMatchInfo(nextMatch ?? null), [nextMatch]);
   const nextPick = useMemo(
     () => computeUpcomingPick(fixtures, nextMatchInfo, settings),
@@ -330,11 +337,11 @@ export default function BacktestView({
   const hasUpcomingPick = nextPick.status === "pick";
 
   const picksForRange = useMemo(() => {
-    const sorted = [...result.picks].sort((a, b) => b.dateTime - a.dateTime);
+    const sorted = [...resultPicks].sort((a, b) => b.dateTime - a.dateTime);
     if (range === "season") return sorted;
     const limit = Number(range);
     return sorted.slice(0, limit);
-  }, [result.picks, range]);
+  }, [resultPicks, range]);
 
   const filteredPicks = useMemo(
     () => picksForRange.filter((pick) => pick.probability >= settings.threshold),
@@ -500,7 +507,7 @@ export default function BacktestView({
               <div className="md:hidden space-y-4">
                 <div className="flex flex-nowrap gap-4 overflow-x-auto no-scrollbar snap-x snap-mandatory">
                   <div className="snap-start shrink-0 w-[85%]">
-                    <Card className="!bg-gradient-to-br from-orange-500 via-orange-400 to-orange-600 text-white !border-0">
+                    <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0 text-center">
                       <p className="text-sm text-white/70">Picks</p>
                       <p className="text-3xl font-semibold">{picksCount}</p>
                       <p className="text-xs text-white/60">
@@ -509,7 +516,7 @@ export default function BacktestView({
                     </Card>
                   </div>
                   <div className="snap-start shrink-0 w-[85%]">
-                    <Card className="!bg-gradient-to-br from-orange-500 via-orange-400 to-orange-600 text-white !border-0">
+                    <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0 text-center">
                       <p className="text-sm text-white/70">Hits</p>
                       <p className="text-3xl font-semibold">{hits}</p>
                       <p className="text-xs text-white/60">
@@ -520,7 +527,7 @@ export default function BacktestView({
                 </div>
                 <div className="flex flex-nowrap gap-4 overflow-x-auto no-scrollbar snap-x snap-mandatory">
                   <div className="snap-start shrink-0 w-[85%]">
-                    <Card className="!bg-gradient-to-br from-orange-500 via-orange-400 to-orange-600 text-white !border-0">
+                    <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0 text-center">
                       <p className="text-sm text-white/70">Hit Rate</p>
                       <p className="text-3xl font-semibold">{hitRate.toFixed(1)}%</p>
                       <p className="text-xs text-white/60">
@@ -529,7 +536,7 @@ export default function BacktestView({
                     </Card>
                   </div>
                   <div className="snap-start shrink-0 w-[85%]">
-                    <Card className="!bg-gradient-to-br from-orange-500 via-orange-400 to-orange-600 text-white !border-0">
+                    <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0 text-center">
                       <p className="text-sm text-white/70">Coverage</p>
                       <p className="text-3xl font-semibold">{coverage.toFixed(1)}%</p>
                       <p className="text-xs text-white/60">Based on picks in range</p>
@@ -539,28 +546,28 @@ export default function BacktestView({
               </div>
 
               <div className="hidden md:grid md:grid-cols-4 gap-4">
-                <Card className="!bg-gradient-to-br from-orange-500 via-orange-400 to-orange-600 text-white !border-0">
+                <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0">
                   <p className="text-sm text-white/70">Picks</p>
                   <p className="text-3xl font-semibold">{picksCount}</p>
                   <p className="text-xs text-white/60">
                     Range: {range === "season" ? "Season" : `${range} matches`}
                   </p>
                 </Card>
-                <Card className="!bg-gradient-to-br from-orange-500 via-orange-400 to-orange-600 text-white !border-0">
+                <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0">
                   <p className="text-sm text-white/70">Hits</p>
                   <p className="text-3xl font-semibold">{hits}</p>
                   <p className="text-xs text-white/60">
                     Threshold {settings.threshold.toFixed(2)}
                   </p>
                 </Card>
-                <Card className="!bg-gradient-to-br from-orange-500 via-orange-400 to-orange-600 text-white !border-0">
+                <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0">
                   <p className="text-sm text-white/70">Hit Rate</p>
                   <p className="text-3xl font-semibold">{hitRate.toFixed(1)}%</p>
                   <p className="text-xs text-white/60">
                     Rolling window {settings.windowSize}
                   </p>
                 </Card>
-                <Card className="!bg-gradient-to-br from-orange-500 via-orange-400 to-orange-600 text-white !border-0">
+                <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0">
                   <p className="text-sm text-white/70">Coverage</p>
                   <p className="text-3xl font-semibold">{coverage.toFixed(1)}%</p>
                   <p className="text-xs text-white/60">Based on picks in range</p>
