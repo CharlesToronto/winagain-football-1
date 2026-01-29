@@ -40,7 +40,7 @@ function normalizeBookmaker(name?: string | null) {
 }
 
 function formatOdd(value: any) {
-  const parsed = Number(value);
+  const parsed = Number(String(value ?? "").replace(",", "."));
   if (!Number.isFinite(parsed)) return "-";
   return parsed.toFixed(2);
 }
@@ -65,6 +65,39 @@ function buildEmptyOdds(): FixtureOdds {
       away: { yes: "-", no: "-" },
     },
   };
+}
+
+function parseOddNumber(value?: string | null) {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function maxOddValue(a?: string | null, b?: string | null) {
+  const na = parseOddNumber(a);
+  const nb = parseOddNumber(b);
+  if (na == null && nb == null) return "-";
+  if (na == null) return b ?? "-";
+  if (nb == null) return a ?? "-";
+  return nb > na ? b ?? "-" : a ?? "-";
+}
+
+function mergeOdds(base: FixtureOdds, next: FixtureOdds): FixtureOdds {
+  const merged = buildEmptyOdds();
+  OVER_UNDER_LINES.forEach((line) => {
+    merged.overUnder.over[line] = maxOddValue(base.overUnder.over[line], next.overUnder.over[line]);
+    merged.overUnder.under[line] = maxOddValue(base.overUnder.under[line], next.overUnder.under[line]);
+  });
+  (["1X", "X2", "12"] as const).forEach((key) => {
+    merged.doubleChance[key] = maxOddValue(base.doubleChance[key], next.doubleChance[key]);
+  });
+  merged.btts.yes = maxOddValue(base.btts.yes, next.btts.yes);
+  merged.btts.no = maxOddValue(base.btts.no, next.btts.no);
+  merged.cleanSheet.home.yes = maxOddValue(base.cleanSheet.home.yes, next.cleanSheet.home.yes);
+  merged.cleanSheet.home.no = maxOddValue(base.cleanSheet.home.no, next.cleanSheet.home.no);
+  merged.cleanSheet.away.yes = maxOddValue(base.cleanSheet.away.yes, next.cleanSheet.away.yes);
+  merged.cleanSheet.away.no = maxOddValue(base.cleanSheet.away.no, next.cleanSheet.away.no);
+  return merged;
 }
 
 export function parseFixtureOddsFromApi(
@@ -106,9 +139,11 @@ export function parseFixtureOddsFromApi(
     ) {
       values.forEach((entry: any) => {
         const raw = String(entry?.value ?? "");
-        const match = raw.match(/^(Over|Under)\s*([0-9.]+)/i);
+        const match = raw.match(/^(Over|Under)\s*([0-9]+(?:[.,][0-9]+)?)/i);
         if (!match) return;
-        const line = match[2];
+        const lineValue = Number(String(match[2]).replace(",", "."));
+        if (!Number.isFinite(lineValue)) return;
+        const line = String(lineValue);
         if (!OVER_UNDER_LINES.includes(line as (typeof OVER_UNDER_LINES)[number])) return;
         const formatted = formatOdd(entry?.odd ?? entry?.odds);
         if (match[1].toLowerCase() === "over") {
@@ -182,18 +217,41 @@ export function parseFixtureOddsFromApi(
   };
 }
 
+export function parseFixtureOddsFromApiMulti(
+  apiResponse: any,
+  bookmakerIds: number[]
+): FixtureOddsResponse {
+  const uniqueIds = Array.from(new Set(bookmakerIds.filter((id) => Number.isFinite(id))));
+  if (!uniqueIds.length) {
+    return { bookmaker: null, odds: buildEmptyOdds() };
+  }
+  let merged = buildEmptyOdds();
+  uniqueIds.forEach((id) => {
+    const parsed = parseFixtureOddsFromApi(apiResponse, id, null);
+    merged = mergeOdds(merged, parsed.odds);
+  });
+  return {
+    bookmaker: { id: null, name: `best:${uniqueIds.join(",")}` },
+    odds: merged,
+  };
+}
+
 export async function fetchFixtureOddsFromApi(params: {
   fixtureId: number;
-  leagueId: number;
+  leagueId?: number | null;
   season: number;
   bookmakerId?: number | null;
+  bookmakerIds?: number[];
   bookmakerName?: string | null;
 }): Promise<FixtureOddsResponse> {
   const api = await fetchApi("odds", {
     fixture: params.fixtureId,
-    league: params.leagueId,
+    league: Number.isFinite(params.leagueId) ? params.leagueId : undefined,
     season: params.season,
   });
 
+  if (params.bookmakerIds && params.bookmakerIds.length > 0) {
+    return parseFixtureOddsFromApiMulti(api, params.bookmakerIds);
+  }
   return parseFixtureOddsFromApi(api, params.bookmakerId, params.bookmakerName);
 }

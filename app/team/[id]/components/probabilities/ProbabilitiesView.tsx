@@ -174,7 +174,7 @@ export default function ProbabilitiesView({
     }
     setOverUnderOddsLoading(true);
     fetch(
-      `/api/odds/fixture?fixture=${fixtureId}&league=${leagueId}&season=${season}&bookmaker=1`
+      `/api/odds/fixture?fixture=${fixtureId}&league=${leagueId}&season=${season}&bookmakers=4,16`
     )
       .then((res) => {
         if (!res.ok) {

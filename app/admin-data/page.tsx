@@ -27,6 +27,11 @@ export default function AdminDataPage() {
   const [htSeconds, setHtSeconds] = useState(0);
   const [htLastManualCall, setHtLastManualCall] = useState<string | null>(null);
   const [htTypingIndex, setHtTypingIndex] = useState(0);
+  const [dailyLoading, setDailyLoading] = useState(false);
+  const [dailySeconds, setDailySeconds] = useState(0);
+  const [dailyTypingIndex, setDailyTypingIndex] = useState(0);
+  const [dailyLastManualCall, setDailyLastManualCall] = useState<string | null>(null);
+  const [dailyLogs, setDailyLogs] = useState<LogEntry[]>([]);
   const cacheReady = useRef(false);
 
   const CACHE_KEY = "admin-data-cache-v1";
@@ -53,12 +58,26 @@ export default function AdminDataPage() {
     return `${base.replace(/\/$/, "")}/api/update/fixtures-ht`;
   }, []);
 
+  const dailyAlgoUrl = useMemo(() => {
+    const base =
+      process.env.NEXT_PUBLIC_BASE_URL ||
+      (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000");
+    return `${base.replace(/\/$/, "")}/api/jobs/daily-algo?task=all`;
+  }, []);
+
   const htTypedLabel = useMemo(() => {
     const base = "Mise à jour HT...";
     if (!htLoading) return "Lancer la mise à jour HT";
     const len = htTypingIndex % (base.length + 1);
     return base.slice(0, len || 1);
   }, [htLoading, htTypingIndex]);
+
+  const dailyTypedLabel = useMemo(() => {
+    const base = "Snapshot...";
+    if (!dailyLoading) return "Lancer snapshot";
+    const len = dailyTypingIndex % (base.length + 1);
+    return base.slice(0, len || 1);
+  }, [dailyLoading, dailyTypingIndex]);
 
   useEffect(() => {
     if (!loading) {
@@ -148,6 +167,20 @@ export default function AdminDataPage() {
     };
   }, [htLoading]);
 
+  useEffect(() => {
+    if (!dailyLoading) {
+      setDailyTypingIndex(0);
+      setDailySeconds(0);
+      return;
+    }
+    const typing = setInterval(() => setDailyTypingIndex((p) => p + 1), 120);
+    const timer = setInterval(() => setDailySeconds((p) => p + 1), 1000);
+    return () => {
+      clearInterval(typing);
+      clearInterval(timer);
+    };
+  }, [dailyLoading]);
+
   async function triggerUpdate() {
     setLoading(true);
     const startedAt = new Date().toISOString();
@@ -221,6 +254,40 @@ export default function AdminDataPage() {
     }
   }
 
+  async function triggerDailySnapshot() {
+    setDailyLoading(true);
+    const startedAt = new Date().toISOString();
+    try {
+      const res = await fetch(dailyAlgoUrl, { method: "GET" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+      setDailyLogs((prev) => [
+        {
+          id: `${Date.now()}-${Math.random()}`,
+          timestamp: new Date().toISOString(),
+          status: "success",
+          message: `Snapshot OK (created: ${body?.created ?? "?"}, resolved: ${
+            body?.resolved ?? "?"
+          })`,
+        },
+        ...prev,
+      ]);
+      setDailyLastManualCall(startedAt);
+    } catch (err: any) {
+      setDailyLogs((prev) => [
+        {
+          id: `${Date.now()}-${Math.random()}`,
+          timestamp: new Date().toISOString(),
+          status: "error",
+          message: err?.message ?? "Erreur inconnue",
+        },
+        ...prev,
+      ]);
+    } finally {
+      setDailyLoading(false);
+    }
+  }
+
   return (
     <div className="min-h-screen w-full p-6 text-white">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
@@ -250,10 +317,47 @@ export default function AdminDataPage() {
         </div>
       </div>
 
+      <div className="mb-6 rounded-lg border border-white/10 bg-white/5 p-4">
+        <p className="text-sm font-semibold mb-2">Procédure manuelle (simple)</p>
+        <div className="text-xs text-white/70 space-y-1">
+          <div>1) Admin → Lancer la mise à jour (fixtures)</div>
+          <div>2) Admin → Lancer snapshot</div>
+          <div>3) Historique Picks → bouton Insérer snapshot (si tu veux forcer depuis cette page)</div>
+        </div>
+      </div>
+
       <div className="grid gap-4">
         <div className="bg-white/10 border border-white/10 rounded-lg p-4">
           <p className="text-sm opacity-70 mb-1">Endpoint appelé</p>
           <p className="text-xs break-all text-white/80">{targetUrl}</p>
+        </div>
+
+        <div className="bg-white/10 border border-white/10 rounded-lg p-4">
+          <p className="text-sm opacity-70 mb-2">Liens cron Vercel</p>
+          <div className="space-y-2 text-xs text-white/80">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+              <span className="opacity-70">Snapshot picks (8h)</span>
+              <a
+                className="text-emerald-300 hover:text-emerald-200 underline break-all"
+                href={dailyAlgoUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {dailyAlgoUrl}
+              </a>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+              <span className="opacity-70">Update fixtures (21h30)</span>
+              <a
+                className="text-emerald-300 hover:text-emerald-200 underline break-all"
+                href={targetUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {targetUrl}
+              </a>
+            </div>
+          </div>
         </div>
 
         <div className="bg-white/10 border border-white/10 rounded-lg p-4">
@@ -295,6 +399,87 @@ export default function AdminDataPage() {
         </div>
 
         <div className="bg-white/5 border border-white/10 rounded-lg p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+            <div>
+              <h3 className="text-lg font-semibold">Snapshot picks (Search Algo)</h3>
+              <p className="text-xs text-white/70">Insère les picks/odds du jour</p>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+              {dailyLoading && (
+                <span className="text-xs px-3 py-1 rounded-full bg-white/15 border border-white/20">
+                  {dailySeconds}s
+                </span>
+              )}
+              <button
+                onClick={triggerDailySnapshot}
+                disabled={dailyLoading}
+                className={`px-4 py-2 rounded-md text-sm font-semibold transition min-w-[200px] text-center w-full sm:w-auto ${
+                  dailyLoading
+                    ? "bg-white/20 text-white/60 cursor-not-allowed"
+                    : "bg-pink-500/70 hover:bg-pink-500"
+                }`}
+              >
+                <span className="inline-block overflow-hidden whitespace-nowrap align-middle">
+                  {dailyTypedLabel}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+            <div className="bg-white/10 border border-white/10 rounded-lg p-3">
+              <p className="text-sm opacity-70 mb-1">Endpoint snapshot</p>
+              <p className="text-xs break-all text-white/80">{dailyAlgoUrl}</p>
+            </div>
+            <div className="bg-white/10 border border-white/10 rounded-lg p-3">
+              <p className="text-sm opacity-70 mb-1">Dernier appel manuel</p>
+              <p className="text-lg font-semibold">
+                {formatFriendlyDate(dailyLastManualCall)}
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-white/10 border border-white/10 rounded-lg p-3">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-md font-semibold">Logs snapshot</h2>
+              <span className="text-xs opacity-60">{dailyLogs.length} entrée(s)</span>
+            </div>
+            {dailyLogs.length === 0 ? (
+              <p className="text-sm opacity-70">Aucun log pour l’instant.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {dailyLogs.map((log) => (
+                  <div
+                    key={log.id}
+                    className={`flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-3 rounded-md px-3 py-2 ${
+                      log.status === "success"
+                        ? "bg-green-500/10 border border-green-500/20"
+                        : "bg-red-500/10 border border-red-500/20"
+                    }`}
+                  >
+                    <div className="text-xs opacity-60 min-w-0 sm:min-w-[110px]">
+                      {formatDate(log.timestamp)}
+                    </div>
+                    <div className="text-sm">
+                      <span
+                        className={`mr-2 text-[11px] px-2 py-0.5 rounded-full uppercase ${
+                          log.status === "success"
+                            ? "bg-green-500/20 text-green-200"
+                            : "bg-red-500/20 text-red-200"
+                        }`}
+                      >
+                        {log.status}
+                      </span>
+                      {log.message}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white/5 border border-white/10 rounded-lg p-4 hidden">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
             <div>
               <h3 className="text-lg font-semibold">Mise à jour HT (goals_home_ht / goals_away_ht)</h3>

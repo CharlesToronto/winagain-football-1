@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Card from "@/app/components/ui/Card";
+import { IconSave } from "@/app/components/icons";
 import { getLeagueFixturesBySeason } from "@/lib/queries/fixtures";
 import { useTeamAlgoSettings } from "@/app/components/algo/useTeamAlgoSettings";
 import {
@@ -30,9 +31,21 @@ const LINE_SETS: MarketLine[][] = [
   [1.5, "1X", "X2"],
   [2.5, "1X", "X2"],
 ];
+const MIN_LINE_ODDS = 1.25;
 
 function lineKey(line: MarketLine) {
   return typeof line === "number" ? line.toString() : line;
+}
+
+type FixtureOdds = {
+  overUnder?: { over: Record<string, string>; under: Record<string, string> };
+  doubleChance?: Record<"1X" | "X2" | "12", string>;
+} | null;
+
+function parseOddValue(value?: string | null) {
+  if (!value) return null;
+  const parsed = Number.parseFloat(String(value).replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 type SeasonMode = "current" | "previous" | "both";
@@ -175,7 +188,7 @@ export default function AlgoAutoTester({
   currentSeason: number;
   onClose?: () => void;
 }) {
-  const { updateGlobalSettings, saveTeamSettings } = useTeamAlgoSettings(teamId);
+  const { saveTeamSettings } = useTeamAlgoSettings(teamId);
   const [seasonMode, setSeasonMode] = useState<SeasonMode>("both");
   const [testsCount, setTestsCount] = useState(30);
   const [resultLimit, setResultLimit] = useState(20);
@@ -203,8 +216,10 @@ export default function AlgoAutoTester({
     mode: "auto" | "full";
   } | null>(null);
   const [overlayActive, setOverlayActive] = useState(false);
-  const [overlayCountdown, setOverlayCountdown] = useState(0);
   const [overlayCount, setOverlayCount] = useState(0);
+  const [overlayProgress, setOverlayProgress] = useState(0);
+  const [nextMatchOdds, setNextMatchOdds] = useState<FixtureOdds>(null);
+  const [nextMatchId, setNextMatchId] = useState<number | null>(null);
   const overlayTimerRef = useRef<number | null>(null);
 
   const seasons = useMemo(() => {
@@ -228,6 +243,86 @@ export default function AlgoAutoTester({
     if (filtered.length) return filtered;
     return selectedLineList.length ? [selectedLineList] : [];
   }, [selectedLines, selectedLineList]);
+
+  const nextFixture = useMemo(() => {
+    if (!teamId) return null;
+    const seasonFixtures = fixturesBySeason[currentSeason] ?? [];
+    const now = Date.now();
+    const upcoming = seasonFixtures
+      .filter((fixture) => {
+        const date = fixture.date_utc ? new Date(fixture.date_utc).getTime() : NaN;
+        if (!Number.isFinite(date) || date < now) return false;
+        return fixture.home_team_id === teamId || fixture.away_team_id === teamId;
+      })
+      .sort((a, b) => {
+        const aTime = a.date_utc ? new Date(a.date_utc).getTime() : 0;
+        const bTime = b.date_utc ? new Date(b.date_utc).getTime() : 0;
+        return aTime - bTime;
+      });
+    return upcoming[0] ?? null;
+  }, [fixturesBySeason, teamId, currentSeason]);
+
+  useEffect(() => {
+    if (!nextFixture?.id || !leagueId) {
+      setNextMatchOdds(null);
+      setNextMatchId(null);
+      return;
+    }
+    const fixtureId = Number(nextFixture.id);
+    if (!Number.isFinite(fixtureId)) return;
+    setNextMatchId(fixtureId);
+    let active = true;
+    fetch(
+      `/api/odds/fixture?fixture=${fixtureId}&league=${leagueId}&season=${currentSeason}&bookmakers=4,16`
+    )
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!active) return;
+        setNextMatchOdds(data?.odds ?? null);
+      })
+      .catch(() => {
+        if (!active) return;
+        setNextMatchOdds(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [nextFixture?.id, leagueId, currentSeason]);
+
+  useEffect(() => {
+    if (!nextMatchOdds || !nextMatchId) return;
+    const lowLines = new Set<string>();
+    LINE_OPTIONS.forEach((line) => {
+      const key = lineKey(line);
+      if (typeof line === "number") {
+        const over = parseOddValue(nextMatchOdds?.overUnder?.over?.[key]);
+        const under = parseOddValue(nextMatchOdds?.overUnder?.under?.[key]);
+        const hasLow =
+          (over != null && over < MIN_LINE_ODDS) ||
+          (under != null && under < MIN_LINE_ODDS);
+        if (hasLow) {
+          lowLines.add(key);
+        }
+      } else {
+        const odd = parseOddValue(nextMatchOdds?.doubleChance?.[line]);
+        if (odd != null && odd < MIN_LINE_ODDS) {
+          lowLines.add(key);
+        }
+      }
+    });
+    if (!lowLines.size) return;
+    setSelectedLines((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      lowLines.forEach((key) => {
+        if (next.has(key)) {
+          next.delete(key);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [nextMatchOdds, nextMatchId]);
 
   useEffect(() => {
     if (!leagueId) return;
@@ -542,13 +637,12 @@ export default function AlgoAutoTester({
     const durationMs = 5000;
     const start = Date.now();
     setOverlayActive(true);
-    setOverlayCountdown(5);
     setOverlayCount(0);
+    setOverlayProgress(0);
     overlayTimerRef.current = window.setInterval(() => {
       const elapsed = Date.now() - start;
       const progress = Math.min(1, elapsed / durationMs);
-      const remaining = Math.max(0, Math.ceil((durationMs - elapsed) / 1000));
-      setOverlayCountdown(remaining);
+      setOverlayProgress(Math.round(progress * 100));
       setOverlayCount(Math.floor(progress * targetCount));
       if (progress >= 1) {
         if (overlayTimerRef.current) {
@@ -572,17 +666,20 @@ export default function AlgoAutoTester({
   return (
     <>
       {overlayActive ? (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 backdrop-blur-md">
-          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#140b22]/90 px-6 py-6 text-center text-white shadow-2xl">
+        <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/70" />
+          <div className="relative w-full max-w-sm rounded-xl border border-white/10 bg-white/10 backdrop-blur-md shadow-lg p-4 text-center text-white">
             <div className="flex items-center justify-center">
               <CharlyLottie className="w-20 h-20" />
             </div>
-            <p className="mt-2 text-sm text-white/70">
-              Nous effectuons des milliers de calculs, veuillez patienter…
-            </p>
-            <div className="mt-3 text-3xl font-semibold tracking-tight">
-              {overlayCountdown}s
+            <div className="text-sm font-semibold text-white">Recherche en cours...</div>
+            <div className="mt-3 h-2 w-full rounded-full bg-white/10 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-green-400 via-emerald-400 to-lime-400 transition-all"
+                style={{ width: `${overlayProgress}%` }}
+              />
             </div>
+            <div className="mt-2 text-[11px] text-white/60">{overlayProgress}%</div>
             <div className="mt-2 text-xs text-white/60">
               Calculs en cours :{" "}
               <span className="text-white font-semibold tabular-nums">
@@ -787,7 +884,7 @@ export default function AlgoAutoTester({
                       : "border-white/10 bg-white/5"
                   }`}
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+                  <div className="flex flex-wrap items-center gap-3 text-sm">
                     <div className="text-white/70">#{index + 1}</div>
                     <div className="flex flex-wrap items-center gap-2 text-white/70">
                       <span>win {row.settings.windowSize}</span>
@@ -795,32 +892,16 @@ export default function AlgoAutoTester({
                       <span>thr {row.settings.threshold.toFixed(2)}</span>
                       <span>lines {row.settings.lines.join("/")}</span>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          updateGlobalSettings(row.settings);
-                          triggerSaved(`row-${row.id}-global`);
-                          void logAlgoEvent({
-                            eventType: "save_global",
-                            teamId,
-                            leagueId,
-                            payload: { source: "autotest", settings: row.settings },
-                          });
-                        }}
-                        className={`px-2 py-1 rounded-md text-xs border border-white/60 text-white/80 bg-transparent transition hover:border-orange-400 hover:bg-orange-500/20 hover:text-white active:scale-95 ${
-                          savedKey === `row-${row.id}-global`
-                            ? "ring-2 ring-orange-400/60 animate-pulse border-orange-400 text-orange-200"
-                            : ""
-                        }`}
-                      >
-                        Save as global
-                      </button>
+                    <div className="ml-auto flex items-center gap-3">
+                      <div className="text-blue-300 font-semibold whitespace-nowrap">
+                        Hit {(row.stats.hitRate * 100).toFixed(1)}% • Cov {(row.stats.coverage * 100).toFixed(1)}% • {row.stats.hits}/{row.stats.picks}
+                      </div>
                       <button
                         type="button"
                         onClick={() => {
                           saveTeamSettings(row.settings);
                           triggerSaved(`row-${row.id}-team`);
+                          setResultsOpen(false);
                           void logAlgoEvent({
                             eventType: "save_team",
                             teamId,
@@ -828,18 +909,17 @@ export default function AlgoAutoTester({
                             payload: { source: "autotest", settings: row.settings },
                           });
                         }}
-                        className={`px-2 py-1 rounded-md text-xs border border-white/60 text-white/80 bg-transparent transition hover:border-orange-400 hover:bg-orange-500/20 hover:text-white active:scale-95 ${
+                        className={`ml-auto inline-flex items-center justify-center rounded-md border border-white/60 text-white/80 bg-transparent transition hover:border-orange-400 hover:bg-orange-500/20 hover:text-white active:scale-95 ${
                           savedKey === `row-${row.id}-team`
                             ? "ring-2 ring-orange-400/60 animate-pulse border-orange-400 text-orange-200"
                             : ""
                         }`}
                         disabled={!teamId}
+                        aria-label="Save as team"
+                        title="Save as team"
                       >
-                        Save as team
+                        <IconSave size={16} />
                       </button>
-                    </div>
-                    <div className="text-blue-300 font-semibold">
-                      Hit {(row.stats.hitRate * 100).toFixed(1)}% • Cov {(row.stats.coverage * 100).toFixed(1)}% • {row.stats.hits}/{row.stats.picks}
                     </div>
                   </div>
                   <div className="text-xs text-white/60">

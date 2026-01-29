@@ -41,6 +41,8 @@ const HIT_MIN = 0.8;
 const PICKS_MIN = 0.33;
 const MIN_TOTAL_PICKS = 25;
 const MIN_ODDS = 1.18;
+const MIN_ODDS_RETRY = 1.2;
+const CURRENT_SEASON = 2025;
 const SETTINGS_STORAGE_PREFIX = "winagain:algo-settings:team:";
 const SCAN_STORAGE_KEY = "winagain:daily-scanner:last";
 const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
@@ -142,7 +144,7 @@ type FixtureOdds = {
 
 function parseOddValue(value?: string | null) {
   if (!value) return null;
-  const parsed = Number.parseFloat(String(value));
+  const parsed = Number.parseFloat(String(value).replace(",", "."));
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -152,32 +154,103 @@ function resolveOddForPick(pick: string, odds?: FixtureOdds | null) {
   if (trimmed === "1X" || trimmed === "X2" || trimmed === "12") {
     return parseOddValue(odds.doubleChance?.[trimmed as "1X" | "X2" | "12"]);
   }
-  const match = trimmed.match(/^(Over|Under)\s+([0-9.]+)$/i);
+  const match = trimmed.match(/^(Over|Under)\s+([0-9]+(?:[.,][0-9]+)?)$/i);
   if (!match) return null;
-  const line = match[2];
-  const key = line;
+  const lineValue = Number(String(match[2]).replace(",", "."));
+  if (!Number.isFinite(lineValue)) return null;
+  const key = String(lineValue);
   if (match[1].toLowerCase() === "over") {
     return parseOddValue(odds.overUnder?.over?.[key]);
   }
   return parseOddValue(odds.overUnder?.under?.[key]);
 }
 
+function extractPickLine(pick: string): MarketLine | null {
+  if (!pick) return null;
+  const trimmed = pick.trim();
+  if (trimmed === "1X" || trimmed === "X2" || trimmed === "12") return trimmed as MarketLine;
+  const match = trimmed.match(/^(Over|Under)\s+([0-9.]+)$/i);
+  if (!match) return null;
+  const line = Number(match[2]);
+  if (!Number.isFinite(line)) return null;
+  return line as MarketLine;
+}
+
+function isSameLine(a: MarketLine, b: MarketLine) {
+  if (typeof a === "number" && typeof b === "number") return a === b;
+  if (typeof a === "string" && typeof b === "string") return a === b;
+  return false;
+}
+
+function createLimiter(limit: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  const next = () => {
+    if (active >= limit || queue.length === 0) return;
+    active += 1;
+    const run = queue.shift();
+    if (run) run();
+  };
+  return async function limitTask<T>(task: () => Promise<T>) {
+    return new Promise<T>((resolve, reject) => {
+      const run = () => {
+        task()
+          .then(resolve)
+          .catch(reject)
+          .finally(() => {
+            active -= 1;
+            next();
+          });
+      };
+      queue.push(run);
+      next();
+    });
+  };
+}
+
+const oddsLimiter = createLimiter(4);
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function fetchFixtureOdds(
   fixtureId: number,
   leagueId: number | null,
   season: number | null
 ): Promise<FixtureOdds | null> {
-  if (!Number.isFinite(fixtureId) || !leagueId || !season) return null;
-  try {
-    const res = await fetch(
-      `/api/odds/fixture?fixture=${fixtureId}&league=${leagueId}&season=${season}&bookmaker=1`
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data?.odds ?? null;
-  } catch {
-    return null;
+  if (!Number.isFinite(fixtureId)) return null;
+  const resolvedSeason =
+    Number.isFinite(season) && (season ?? 0) > 0 ? (season as number) : CURRENT_SEASON;
+  if (!Number.isFinite(resolvedSeason)) return null;
+  const params = new URLSearchParams({
+    fixture: String(fixtureId),
+    season: String(resolvedSeason),
+    bookmakers: "4,16",
+  });
+  if (Number.isFinite(leagueId) && (leagueId ?? 0) > 0) {
+    params.set("league", String(leagueId));
   }
+  return oddsLimiter(async () => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const res = await fetch(`/api/odds/fixture?${params.toString()}`);
+        if (res.ok) {
+          const data = await res.json();
+          return data?.odds ?? null;
+        }
+        if (res.status === 429 && attempt === 0) {
+          await sleep(600);
+          continue;
+        }
+        return null;
+      } catch {
+        if (attempt === 0) {
+          await sleep(600);
+          continue;
+        }
+        return null;
+      }
+    }
+    return null;
+  });
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -204,7 +277,8 @@ function shrink(avg: number, n: number, priorAvg: number, priorN: number) {
 function computeUpcomingPick(
   fixtures: BacktestFixture[],
   nextMatch: NextMatchInfo,
-  settings: AlgoSettings
+  settings: AlgoSettings,
+  excludeLine?: MarketLine | null
 ) {
   if (!nextMatch?.homeId || !nextMatch?.awayId) {
     return { status: "no-data" as const };
@@ -290,6 +364,7 @@ function computeUpcomingPick(
     | null = null;
 
   for (const line of settings.lines) {
+    if (excludeLine != null && isSameLine(line, excludeLine)) continue;
     if (typeof line === "number") {
       const thresholdLine = Math.floor(line);
       const pUnder = poissonCdf(lambda, thresholdLine);
@@ -401,12 +476,21 @@ export default function DailyScannerPanel() {
   const [error, setError] = useState<string | null>(null);
   const [lastScanInfo, setLastScanInfo] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  const [dayTab, setDayTab] = useState<"today" | "tomorrow">("today");
   const cacheRef = useRef<Map<string, TeamEval>>(new Map());
 
   const timeZone = useMemo(
     () => Intl.DateTimeFormat().resolvedOptions().timeZone ?? "local",
     []
   );
+
+  const toDateKey = (value: Date) =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(value);
 
   const todayLabel = useMemo(() => {
     const now = new Date();
@@ -418,6 +502,36 @@ export default function DailyScannerPanel() {
     tomorrow.setDate(tomorrow.getDate() + 1);
     return tomorrow.toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "short" });
   }, []);
+
+  const todayKey = useMemo(() => toDateKey(new Date()), [timeZone]);
+  const tomorrowKey = useMemo(() => {
+    const next = new Date();
+    next.setDate(next.getDate() + 1);
+    return toDateKey(next);
+  }, [timeZone]);
+
+  const filteredResults = useMemo(() => {
+    const key = dayTab === "today" ? todayKey : tomorrowKey;
+    return results.filter((row) => {
+      if (!row.dateUtc) return false;
+      const date = new Date(row.dateUtc);
+      if (!Number.isFinite(date.getTime())) return false;
+      return toDateKey(date) === key;
+    });
+  }, [results, dayTab, todayKey, tomorrowKey]);
+
+  const summaryStats = useMemo(() => {
+    const count = filteredResults.length;
+    const avgHit =
+      count > 0
+        ? (filteredResults.reduce((sum, row) => sum + (row.hitRate ?? 0), 0) / count) * 100
+        : 0;
+    const odds = filteredResults
+      .map((row) => Number(row.odd))
+      .filter((val) => Number.isFinite(val) && val > 1);
+    const avgOdd = odds.length ? odds.reduce((sum, val) => sum + val, 0) / odds.length : 0;
+    return { count, avgHit, avgOdd };
+  }, [filteredResults]);
 
   const candidatePool = useMemo(() => buildCandidateSettings(VARIANT_COUNT), []);
 
@@ -593,16 +707,25 @@ export default function DailyScannerPanel() {
       fixtures.forEach((fixture) => {
         if (!Number.isFinite(fixture.competition_id)) return;
         const leagueId = Number(fixture.competition_id);
-        const season = Number(fixture.season ?? 0);
-        if (!Number.isFinite(season)) return;
+        const season = Number(fixture.season);
+        if (!Number.isFinite(season) || season <= 0) return;
         const current = leagueSeasonMap.get(leagueId) ?? 0;
         if (season > current) leagueSeasonMap.set(leagueId, season);
       });
 
+      const resolveSeason = (fixture: FixtureLite) => {
+        const season = Number(fixture.season);
+        if (Number.isFinite(season) && season > 0) return season;
+        const leagueId = Number(fixture.competition_id);
+        const fallback = leagueSeasonMap.get(leagueId);
+        if (Number.isFinite(fallback) && (fallback ?? 0) > 0) return fallback as number;
+        return CURRENT_SEASON;
+      };
+
       const leagueFixturesMap = new Map<number, BacktestFixture[]>();
       await Promise.all(
         leagueIds.map(async (leagueId) => {
-          const currentSeason = leagueSeasonMap.get(leagueId) ?? new Date().getFullYear();
+          const currentSeason = leagueSeasonMap.get(leagueId) ?? CURRENT_SEASON;
           const seasons = [currentSeason - 1, currentSeason];
           const seasonFixtures = await Promise.all(
             seasons.map((season) => getLeagueFixturesBySeason(leagueId, season))
@@ -677,6 +800,7 @@ export default function DailyScannerPanel() {
         string,
         { evalResult: TeamEval; meetsCriteria: boolean } | null
       >();
+      const settingsByRow = new Map<string, AlgoSettings>();
       const autoSavedTeams = new Set<number>();
       const output: ScanResult[] = [];
 
@@ -739,13 +863,14 @@ export default function DailyScannerPanel() {
           const pickResult = computeUpcomingPick(leagueFixtures, matchInfo, evalResult.settings);
           if (pickResult.status !== "pick" || !pickResult.pick) return;
 
+          settingsByRow.set(`${fixture.id}:${teamId}`, evalResult.settings);
           output.push({
             fixtureId: fixture.id,
             competitionId: Number.isFinite(leagueId) ? leagueId : null,
             competitionName: competitionNameMap.get(leagueId) ?? null,
             competitionCountry: competitionCountryMap.get(leagueId) ?? null,
             competitionLogo: competitionLogoMap.get(leagueId) ?? null,
-            season: fixture.season ?? leagueSeasonMap.get(leagueId) ?? null,
+            season: resolveSeason(fixture),
             dateUtc: fixture.date_utc ?? null,
             homeId: fixture.home?.id ?? null,
             awayId: fixture.away?.id ?? null,
@@ -792,10 +917,51 @@ export default function DailyScannerPanel() {
             odds = await fetchFixtureOdds(row.fixtureId, row.competitionId, row.season);
             oddsCache.set(row.fixtureId, odds ?? null);
           }
-          const oddValue = resolveOddForPick(row.pick, odds);
+          let pick = row.pick;
+          let probability = row.probability;
+          let oddValue = resolveOddForPick(pick, odds);
+
+          const baseCriteria =
+            row.hitRate >= HIT_MIN &&
+            row.coverage >= PICKS_MIN &&
+            row.picks >= MIN_TOTAL_PICKS;
+
+          if (
+            baseCriteria &&
+            (oddValue == null || oddValue < MIN_ODDS_RETRY)
+          ) {
+            const settings = settingsByRow.get(`${row.fixtureId}:${row.teamId}`);
+            const leagueFixtures = leagueFixturesMap.get(row.competitionId ?? 0) ?? [];
+            const excludeLine = extractPickLine(pick);
+            if (settings && excludeLine && leagueFixtures.length) {
+              const alt = computeUpcomingPick(
+                leagueFixtures,
+                {
+                  fixtureId: row.fixtureId,
+                  dateUtc: row.dateUtc ?? null,
+                  homeId: row.homeId ?? null,
+                  awayId: row.awayId ?? null,
+                },
+                settings,
+                excludeLine
+              );
+              if (alt.status === "pick" && alt.pick) {
+                const altOdd = resolveOddForPick(alt.pick, odds);
+                const currentOdd = oddValue == null ? 0 : oddValue;
+                if (altOdd != null && altOdd > currentOdd) {
+                  pick = alt.pick;
+                  probability = alt.probability ?? probability;
+                  oddValue = altOdd;
+                }
+              }
+            }
+          }
+
           const meetsOdds = oddValue == null ? true : oddValue >= MIN_ODDS;
           return {
             ...row,
+            pick,
+            probability,
             odd: oddValue,
             meetsOdds,
             meetsCriteria: row.meetsCriteria,
@@ -877,11 +1043,29 @@ export default function DailyScannerPanel() {
         </div>
       ) : null}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div>
-          <p className="text-xs text-white/50">
-            {formatDateLabel(todayLabel)} + {formatDateLabel(tomorrowLabel)} • Heure locale{" "}
-            {timeZone}
-          </p>
+        <div className="flex items-center justify-center gap-2 overflow-x-auto no-scrollbar md:justify-start">
+          <button
+            type="button"
+            onClick={() => setDayTab("today")}
+            className={`px-3 py-1 rounded-lg text-sm transition whitespace-nowrap ${
+              dayTab === "today"
+                ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
+                : "bg-white/10 text-white/70 hover:bg-white/20"
+            }`}
+          >
+            Aujourd&apos;hui
+          </button>
+          <button
+            type="button"
+            onClick={() => setDayTab("tomorrow")}
+            className={`px-3 py-1 rounded-lg text-sm transition whitespace-nowrap ${
+              dayTab === "tomorrow"
+                ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
+                : "bg-white/10 text-white/70 hover:bg-white/20"
+            }`}
+          >
+            Demain
+          </button>
         </div>
         <button
           type="button"
@@ -903,16 +1087,43 @@ export default function DailyScannerPanel() {
         <div className="text-xs text-white/60">{lastScanInfo}</div>
       ) : null}
 
+      {filteredResults.length > 0 ? (
+        <div className="grid grid-cols-3 gap-2 text-xs text-white/70">
+          <div className="rounded-lg border border-pink-400/60 bg-pink-500/20 px-3 py-2 text-center text-pink-100">
+            <div className="text-[10px] text-pink-200/70">Matchs</div>
+            <div className="text-sm font-semibold">{summaryStats.count}</div>
+          </div>
+          <div className="rounded-lg border border-pink-400/60 bg-pink-500/20 px-3 py-2 text-center text-pink-100">
+            <div className="text-[10px] text-pink-200/70">Hit moyen</div>
+            <div className="text-sm font-semibold">
+              {summaryStats.avgHit.toFixed(1)}%
+            </div>
+          </div>
+          <div className="rounded-lg border border-pink-400/60 bg-pink-500/20 px-3 py-2 text-center text-pink-100">
+            <div className="text-[10px] text-pink-200/70">Cote moyenne</div>
+            <div className="text-sm font-semibold">
+              {summaryStats.avgOdd ? summaryStats.avgOdd.toFixed(2) : "-"}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {results.length === 0 && !loading ? (
         <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-sm text-white/60">
           Lancer une recherche pour trouver les meilleurs opportunités
         </div>
       ) : null}
 
-      {results.length > 0 ? (
+      {results.length > 0 && filteredResults.length === 0 && !loading ? (
+        <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-sm text-white/60">
+          Aucun match pour {dayTab === "today" ? formatDateLabel(todayLabel) : formatDateLabel(tomorrowLabel)}.
+        </div>
+      ) : null}
+
+      {filteredResults.length > 0 ? (
         <div className="space-y-3 -mx-4 px-2 md:mx-0 md:px-0">
           {Array.from(
-            results
+            filteredResults
               .reduce((map, row) => {
                 const key = row.competitionId ? String(row.competitionId) : "unknown";
                 if (!map.has(key)) {
@@ -1037,11 +1248,10 @@ export default function DailyScannerPanel() {
                             Pick {row.pick}
                           </span>
                           <span className="text-pink-200">
-                            {(row.probability * 100).toFixed(1)}%
+                            @{row.odd != null ? row.odd.toFixed(2) : "-"}
                           </span>
                           <span className="text-xs text-white/60 text-right ml-auto">
-                            Hit {hitPercent.toFixed(1)}% • {hits}/{row.picks} • Odd{" "}
-                            {row.odd != null ? row.odd.toFixed(2) : "-"}
+                            Hit {hitPercent.toFixed(1)}% • {hits}/{row.picks}
                           </span>
                         </div>
                       </Wrapper>

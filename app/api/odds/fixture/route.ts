@@ -2,29 +2,38 @@ import { NextResponse } from "next/server";
 import { fetchFixtureOddsFromApi } from "@/lib/odds/fixtureOdds";
 
 export const dynamic = "force-dynamic";
+const CURRENT_SEASON = 2025;
 
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const fixture = Number(url.searchParams.get("fixture"));
-    const league = Number(url.searchParams.get("league"));
-    const season = Number(url.searchParams.get("season"));
-    const bookmakerParam = url.searchParams.get("bookmaker") ?? "1";
-    const bookmakerId = Number(bookmakerParam);
+    const leagueParam = url.searchParams.get("league");
+    const league = leagueParam ? Number(leagueParam) : null;
+    const seasonParam = url.searchParams.get("season");
+    const season = seasonParam ? Number(seasonParam) : CURRENT_SEASON;
+    const bookmakersParam =
+      url.searchParams.get("bookmakers") ?? url.searchParams.get("bookmaker") ?? "1";
+    const bookmakerIds = String(bookmakersParam)
+      .split(",")
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isFinite(value));
+    const bookmakerId = bookmakerIds.length ? bookmakerIds[0] : Number(bookmakersParam);
 
-    if (!Number.isFinite(fixture) || !Number.isFinite(league) || !Number.isFinite(season)) {
+    if (!Number.isFinite(fixture) || !Number.isFinite(season) || season <= 0) {
       return NextResponse.json(
-        { error: "Missing fixture/league/season params." },
+        { error: "Missing fixture/season params." },
         { status: 400 }
       );
     }
 
     const result = await fetchFixtureOddsFromApi({
       fixtureId: fixture,
-      leagueId: league,
+      leagueId: Number.isFinite(league) ? league : null,
       season,
       bookmakerId: Number.isFinite(bookmakerId) ? bookmakerId : null,
-      bookmakerName: bookmakerParam,
+      bookmakerIds: bookmakerIds.length ? bookmakerIds : undefined,
+      bookmakerName: bookmakersParam,
     });
 
     return NextResponse.json(result);

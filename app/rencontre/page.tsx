@@ -121,11 +121,9 @@ export default async function RencontrePage({
   const activeDay =
     searchParams?.day === "yesterday"
       ? "yesterday"
-      : searchParams?.day === "today"
-      ? "today"
       : searchParams?.day === "tomorrow"
         ? "tomorrow"
-        : "all";
+        : "today";
 
   const supabase = createClient();
   const { data, error } = await supabase
@@ -338,7 +336,7 @@ export default async function RencontrePage({
                         key={`competition-${section.key}-${group.competition.id}-${activeDay}`}
                         className="group -mx-4 px-2 rounded-xl bg-transparent"
                       >
-                        <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none rounded-xl border border-white/10 group-open:border-transparent text-[11px]">
+                        <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none rounded-xl border-2 border-white/20 bg-gradient-to-br from-white/10 via-white/5 to-white/10 backdrop-blur-sm group-open:border-transparent group-open:bg-transparent text-[11px]">
                           {group.competition.logo ? (
                             <img
                               src={group.competition.logo}

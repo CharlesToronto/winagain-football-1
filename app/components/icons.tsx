@@ -110,3 +110,11 @@ export function IconMessage({ size = 18, ...props }: IconProps) {
     </svg>
   );
 }
+
+export function IconSave({ size = 18, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden {...baseProps} {...props}>
+      <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
+    </svg>
+  );
+}

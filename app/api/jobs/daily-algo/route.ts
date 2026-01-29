@@ -39,7 +39,8 @@ const HIT_MIN = 0.8;
 const PICKS_MIN = 0.33;
 const MIN_TOTAL_PICKS = 25;
 const MIN_ODDS = 1.18;
-const BOOKMAKER_ID = 1;
+const BOOKMAKER_IDS = [4, 16];
+const CURRENT_SEASON = 2025;
 const TIMEZONE = "America/Toronto";
 
 type FixtureLite = {
@@ -116,11 +117,13 @@ function normalizeBacktestFixture(fixture: any): BacktestFixture {
 
 const BASELINE_HOME = 1.35;
 const BASELINE_AWAY = 1.15;
+const MIN_ODDS_RETRY = 1.2;
 
 function computeUpcomingPick(
   fixtures: BacktestFixture[],
   nextMatch: NextMatchInfo,
-  settings: AlgoSettings
+  settings: AlgoSettings,
+  excludeLine?: MarketLine | null
 ) {
   if (!nextMatch?.homeId || !nextMatch?.awayId) return { status: "no-data" as const };
   const targetTime = nextMatch.dateUtc ? new Date(nextMatch.dateUtc).getTime() : Infinity;
@@ -207,6 +210,7 @@ function computeUpcomingPick(
     | null = null;
 
   for (const line of settings.lines) {
+    if (excludeLine != null && isSameLine(line, excludeLine)) continue;
     if (typeof line === "number") {
       const thresholdLine = Math.floor(line);
       const pUnder = poissonCdf(lambda, thresholdLine);
@@ -351,7 +355,7 @@ function findBestSettings(
 
 function parseOddValue(value?: string | null) {
   if (!value) return null;
-  const parsed = Number.parseFloat(String(value));
+  const parsed = Number.parseFloat(String(value).replace(",", "."));
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -361,13 +365,34 @@ function resolveOddForPick(pick: string, odds: any) {
   if (trimmed === "1X" || trimmed === "X2" || trimmed === "12") {
     return parseOddValue(odds.doubleChance?.[trimmed]);
   }
-  const match = trimmed.match(/^(Over|Under)\s+([0-9.]+)$/i);
+  const match = trimmed.match(/^(Over|Under)\s+([0-9]+(?:[.,][0-9]+)?)$/i);
   if (!match) return null;
-  const line = match[2];
+  const lineValue = Number(String(match[2]).replace(",", "."));
+  if (!Number.isFinite(lineValue)) return null;
+  const line = String(lineValue);
   if (match[1].toLowerCase() === "over") {
     return parseOddValue(odds.overUnder?.over?.[line]);
   }
   return parseOddValue(odds.overUnder?.under?.[line]);
+}
+
+function extractPickLine(pick: string): MarketLine | null {
+  if (!pick) return null;
+  const trimmed = pick.trim();
+  if (trimmed === "1X" || trimmed === "X2" || trimmed === "12") {
+    return trimmed as MarketLine;
+  }
+  const match = trimmed.match(/^(Over|Under)\s+([0-9.]+)$/i);
+  if (!match) return null;
+  const line = Number(match[2]);
+  if (!Number.isFinite(line)) return null;
+  return line as MarketLine;
+}
+
+function isSameLine(a: MarketLine, b: MarketLine) {
+  if (typeof a === "number" && typeof b === "number") return a === b;
+  if (typeof a === "string" && typeof b === "string") return a === b;
+  return false;
 }
 
 function getTzParts(date: Date, timeZone: string) {
@@ -444,19 +469,25 @@ export async function GET(request: Request) {
     const summary: Record<string, any> = {};
 
     if (task === "all" || task === "resolve") {
-      const { data: pending } = await supabase
+      const { data: pending, error: pendingError } = await supabase
         .from("daily_algo_picks")
         .select("id, fixture_id, pick")
         .or("status.eq.pending,status.is.null");
+      if (pendingError) {
+        return NextResponse.json({ error: pendingError.message }, { status: 500 });
+      }
 
       if (pending?.length) {
         const fixtureIds = Array.from(
           new Set(pending.map((row: any) => Number(row.fixture_id)).filter(Number.isFinite))
         );
-        const { data: fixtures } = await supabase
+        const { data: fixtures, error: fixturesError } = await supabase
           .from("fixtures")
           .select("id, goals_home, goals_away, status_short")
           .in("id", fixtureIds);
+        if (fixturesError) {
+          return NextResponse.json({ error: fixturesError.message }, { status: 500 });
+        }
 
         const fixtureMap = new Map<number, any>();
         (fixtures ?? []).forEach((row: any) => {
@@ -535,16 +566,25 @@ export async function GET(request: Request) {
       fixtures.forEach((fixture) => {
         if (!Number.isFinite(fixture.competition_id)) return;
         const leagueId = Number(fixture.competition_id);
-        const season = Number(fixture.season ?? 0);
-        if (!Number.isFinite(season)) return;
+        const season = Number(fixture.season);
+        if (!Number.isFinite(season) || season <= 0) return;
         const current = leagueSeasonMap.get(leagueId) ?? 0;
         if (season > current) leagueSeasonMap.set(leagueId, season);
       });
 
+      const resolveSeason = (fixture: FixtureLite) => {
+        const season = Number(fixture.season);
+        if (Number.isFinite(season) && season > 0) return season;
+        const leagueId = Number(fixture.competition_id);
+        const fallback = leagueSeasonMap.get(leagueId);
+        if (Number.isFinite(fallback) && (fallback ?? 0) > 0) return fallback as number;
+        return CURRENT_SEASON;
+      };
+
       const leagueFixturesMap = new Map<number, BacktestFixture[]>();
       await Promise.all(
         leagueIds.map(async (leagueId) => {
-          const currentSeason = leagueSeasonMap.get(leagueId) ?? new Date().getFullYear();
+          const currentSeason = leagueSeasonMap.get(leagueId) ?? CURRENT_SEASON;
           const seasons = [currentSeason - 1, currentSeason];
           const seasonFixtures = await Promise.all(
             seasons.map(async (season) => {
@@ -642,13 +682,13 @@ export async function GET(request: Request) {
           let odds = oddsCache.get(fixture.id) ?? null;
           if (!oddsCache.has(fixture.id)) {
             try {
-              const season = Number(fixture.season ?? 0);
-              if (Number.isFinite(season) && Number.isFinite(leagueId)) {
+              const season = resolveSeason(fixture);
+              if (Number.isFinite(season)) {
                 const apiOdds = await fetchFixtureOddsFromApi({
                   fixtureId: fixture.id,
-                  leagueId,
+                  leagueId: Number.isFinite(leagueId) ? leagueId : null,
                   season,
-                  bookmakerId: BOOKMAKER_ID,
+                  bookmakerIds: BOOKMAKER_IDS,
                 });
                 odds = apiOdds.odds;
               }
@@ -658,11 +698,41 @@ export async function GET(request: Request) {
             oddsCache.set(fixture.id, odds);
           }
 
-          const oddValue = resolveOddForPick(pickResult.pick, odds);
-          const meetsOdds = oddValue != null && oddValue >= MIN_ODDS;
-          const meetsCriteria =
+          let pick = pickResult.pick;
+          let probability = pickResult.probability ?? 0;
+          let oddValue = resolveOddForPick(pick, odds);
+
+          if (
             cached.meetsCriteria &&
-            meetsOdds;
+            (oddValue == null || oddValue < MIN_ODDS_RETRY)
+          ) {
+            const excludeLine = extractPickLine(pick);
+            if (excludeLine) {
+              const alt = computeUpcomingPick(
+                leagueFixtures,
+                {
+                  fixtureId: fixture.id,
+                  dateUtc: fixture.date_utc ?? null,
+                  homeId: fixture.home?.id ?? null,
+                  awayId: fixture.away?.id ?? null,
+                },
+                cached.evalResult.settings,
+                excludeLine
+              );
+              if (alt.status === "pick" && alt.pick) {
+                const altOdd = resolveOddForPick(alt.pick, odds);
+                const currentOdd = oddValue == null ? 0 : oddValue;
+                if (altOdd != null && altOdd > currentOdd) {
+                  pick = alt.pick;
+                  probability = alt.probability ?? probability;
+                  oddValue = altOdd;
+                }
+              }
+            }
+          }
+
+          const meetsOdds = oddValue != null && oddValue >= MIN_ODDS;
+          const meetsCriteria = cached.meetsCriteria && meetsOdds;
 
           rows.push({
             snapshot_date: dateKey,
@@ -673,17 +743,17 @@ export async function GET(request: Request) {
             competition_name: competitionNameMap.get(leagueId) ?? null,
             team_id: teamId,
             side: entry.side,
-            pick: pickResult.pick,
-            market: pickResult.pick.startsWith("Over") || pickResult.pick.startsWith("Under")
+            pick,
+            market: pick.startsWith("Over") || pick.startsWith("Under")
               ? "over_under"
               : "double_chance",
-            probability: pickResult.probability ?? 0,
+            probability,
             hit_rate: cached.evalResult.stats.hitRate,
             coverage: cached.evalResult.stats.coverage,
             picks_count: cached.evalResult.stats.picks,
             evaluated_count: cached.evalResult.stats.evaluated,
             odd: oddValue,
-            odds_bookmaker_id: BOOKMAKER_ID,
+            odds_bookmaker_id: null,
             meets_algo_criteria: cached.meetsCriteria,
             meets_odds: meetsOdds,
             meets_criteria: meetsCriteria,
@@ -696,13 +766,42 @@ export async function GET(request: Request) {
         }
       }
 
+      let createdCount = 0;
+      let updatedCount = 0;
       if (rows.length) {
-        await supabase
+        const { data: existingRows, error: existingError } = await supabase
           .from("daily_algo_picks")
-          .upsert(rows, { onConflict: "snapshot_date,fixture_id,team_id,pick" });
+          .select("fixture_id,team_id,pick")
+          .eq("snapshot_date", dateKey);
+        if (existingError) {
+          return NextResponse.json({ error: existingError.message }, { status: 500 });
+        }
+        const existingKeys = new Set(
+          (existingRows ?? []).map(
+            (row: any) => `${row.fixture_id ?? ""}|${row.team_id ?? ""}|${row.pick ?? ""}`
+          )
+        );
+        for (const row of rows) {
+          const key = `${row.fixture_id ?? ""}|${row.team_id ?? ""}|${row.pick ?? ""}`;
+          if (existingKeys.has(key)) {
+            updatedCount += 1;
+          } else {
+            createdCount += 1;
+          }
+        }
       }
 
-      summary.created = rows.length;
+      if (rows.length) {
+        const { error: upsertError } = await supabase
+          .from("daily_algo_picks")
+          .upsert(rows, { onConflict: "snapshot_date,fixture_id,team_id,pick" });
+        if (upsertError) {
+          return NextResponse.json({ error: upsertError.message }, { status: 500 });
+        }
+      }
+
+      summary.created = createdCount;
+      summary.updated = updatedCount;
       summary.snapshotDate = dateKey;
     }
 

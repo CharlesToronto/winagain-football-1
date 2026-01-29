@@ -331,7 +331,7 @@ export default function OddsView({
     setApiOddsLoading(true);
     setApiOddsError(null);
     fetch(
-      `/api/odds/fixture?fixture=${fixtureId}&league=${leagueId}&season=${season}&bookmaker=1`
+      `/api/odds/fixture?fixture=${fixtureId}&league=${leagueId}&season=${season}&bookmakers=4,16`
     )
       .then(async (res) => {
         if (!res.ok) {

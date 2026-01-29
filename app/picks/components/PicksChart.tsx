@@ -5,9 +5,10 @@ type Point = { x: number; y: number };
 type Props = {
   points: Point[];
   label?: string;
+  subLabel?: string;
 };
 
-export default function PicksChart({ points, label = "Historique des picks" }: Props) {
+export default function PicksChart({ points, label = "Historique des picks", subLabel }: Props) {
   if (!points.length) {
     return (
       <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-white/70 text-sm">
@@ -38,8 +39,11 @@ export default function PicksChart({ points, label = "Historique des picks" }: P
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-white">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="font-semibold text-lg">{label}</h3>
-        <span className="text-xs text-white/60">X: picks • Y: profit cumulé</span>
+        <h3 className="font-semibold text-lg flex flex-wrap items-baseline gap-2">
+          <span>{label}</span>
+          {subLabel ? <span className="text-xs text-white/60 font-normal">{subLabel}</span> : null}
+        </h3>
+        <span className="text-xs text-white/60">X: picks • Y: capital</span>
       </div>
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-60">
         <defs>
