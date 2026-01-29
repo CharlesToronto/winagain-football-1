@@ -745,7 +745,7 @@ export default function DailyScannerPanel() {
             competitionName: competitionNameMap.get(leagueId) ?? null,
             competitionCountry: competitionCountryMap.get(leagueId) ?? null,
             competitionLogo: competitionLogoMap.get(leagueId) ?? null,
-            season: fixture.season ?? null,
+            season: fixture.season ?? leagueSeasonMap.get(leagueId) ?? null,
             dateUtc: fixture.date_utc ?? null,
             homeId: fixture.home?.id ?? null,
             awayId: fixture.away?.id ?? null,
@@ -793,12 +793,12 @@ export default function DailyScannerPanel() {
             oddsCache.set(row.fixtureId, odds ?? null);
           }
           const oddValue = resolveOddForPick(row.pick, odds);
-          const meetsOdds = oddValue != null && oddValue >= MIN_ODDS;
+          const meetsOdds = oddValue == null ? true : oddValue >= MIN_ODDS;
           return {
             ...row,
             odd: oddValue,
             meetsOdds,
-            meetsCriteria: row.meetsCriteria && meetsOdds,
+            meetsCriteria: row.meetsCriteria,
           };
         })
       );
@@ -974,14 +974,13 @@ export default function DailyScannerPanel() {
                       ? Math.min(row.picks, Math.max(0, Math.round(row.hitRate * row.picks)))
                       : 0;
                     const hitPercent = row.picks ? (hits / row.picks) * 100 : 0;
+                    const baseCriteria =
+                      row.hitRate >= HIT_MIN &&
+                      row.coverage >= PICKS_MIN &&
+                      row.picks >= MIN_TOTAL_PICKS;
                     const oddsOk =
-                      row.meetsOdds ?? (row.odd != null ? row.odd >= MIN_ODDS : false);
-                    const criteriaOk =
-                      (row.meetsCriteria ??
-                        (row.hitRate >= HIT_MIN &&
-                          row.coverage >= PICKS_MIN &&
-                          row.picks >= MIN_TOTAL_PICKS)) &&
-                      oddsOk;
+                      row.meetsOdds ?? (row.odd != null ? row.odd >= MIN_ODDS : true);
+                    const criteriaOk = baseCriteria && oddsOk;
                     const Wrapper = targetHref ? Link : "div";
                     return (
                       <Wrapper
