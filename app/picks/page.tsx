@@ -370,7 +370,7 @@ export default function PicksHistoryPage() {
   return (
     <div className="min-h-screen w-full p-6 text-white space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Historique Picks (Search Algo)</h1>
+        <h1 className="text-3xl font-bold text-yellow-400">Historique Picks (Search Algo)</h1>
         <p className="text-sm text-white/60">
           Suivi automatique des picks, odds et résultats.
         </p>
