@@ -17,9 +17,9 @@ export default function PicksChart({ points, label = "Historique des picks", sub
     );
   }
 
-  const width = 800;
-  const height = 240;
-  const padding = 28;
+  const width = 960;
+  const height = 320;
+  const padding = 22;
 
   const minX = 0;
   const maxX = Math.max(points.length - 1, 1);
@@ -32,7 +32,26 @@ export default function PicksChart({ points, label = "Historique des picks", sub
   const mapY = (y: number) =>
     height - padding - ((y - minY) / rangeY) * (height - padding * 2);
 
-  const path = points.map((p) => `${mapX(p.x)},${mapY(p.y)}`).join(" ");
+  const mapped = points.map((p) => ({ x: mapX(p.x), y: mapY(p.y) }));
+  const buildSmoothPath = (pts: { x: number; y: number }[]) => {
+    if (!pts.length) return "";
+    if (pts.length === 1) return `M ${pts[0].x},${pts[0].y}`;
+    let d = `M ${pts[0].x},${pts[0].y}`;
+    for (let i = 0; i < pts.length - 1; i += 1) {
+      const p0 = i > 0 ? pts[i - 1] : pts[i];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = i !== pts.length - 2 ? pts[i + 2] : p2;
+      const c1x = p1.x + (p2.x - p0.x) / 6;
+      const c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6;
+      const c2y = p2.y - (p3.y - p1.y) / 6;
+      d += ` C ${c1x},${c1y} ${c2x},${c2y} ${p2.x},${p2.y}`;
+    }
+    return d;
+  };
+  const linePath = buildSmoothPath(mapped);
+  const areaPath = `${linePath} L ${width - padding},${height - padding} L ${padding},${height - padding} Z`;
   const ticks = 6;
   const ySteps = Array.from({ length: ticks }, (_, i) => minY + (rangeY / (ticks - 1)) * i);
 
@@ -45,11 +64,11 @@ export default function PicksChart({ points, label = "Historique des picks", sub
         </h3>
         <span className="text-xs text-white/60">X: picks • Y: capital</span>
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-60">
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-80">
         <defs>
           <linearGradient id="picksGradient" x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="#ec4899" stopOpacity="0.25" />
-            <stop offset="100%" stopColor="#ec4899" stopOpacity="0" />
+            <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.06" />
           </linearGradient>
         </defs>
 
@@ -76,23 +95,19 @@ export default function PicksChart({ points, label = "Historique des picks", sub
           </g>
         ))}
 
-        <polyline
-          fill="url(#picksGradient)"
-          stroke="none"
-          points={`${padding},${height - padding} ${path} ${width - padding},${height - padding}`}
-        />
+        <path fill="url(#picksGradient)" stroke="none" d={areaPath} />
 
-        <polyline
+        <path
           fill="none"
-          stroke="#ec4899"
+          stroke="#38bdf8"
           strokeWidth="3"
           strokeLinejoin="round"
           strokeLinecap="round"
-          points={path}
+          d={linePath}
         />
 
-        {points.map((p, idx) => (
-          <circle key={idx} cx={mapX(p.x)} cy={mapY(p.y)} r={3} fill="#ec4899" />
+        {mapped.map((p, idx) => (
+          <circle key={idx} cx={p.x} cy={p.y} r={3} fill="#38bdf8" />
         ))}
       </svg>
     </div>

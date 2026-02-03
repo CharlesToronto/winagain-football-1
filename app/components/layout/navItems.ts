@@ -15,7 +15,7 @@ export const navItems = [
   { name: "Leagues", href: "/leagues", icon: IconTrophy },
   { name: "Rencontre", href: "/rencontre", icon: IconCalendar },
   { name: "Search", href: "/search", icon: IconSearch },
-  { name: "Historique Picks", href: "/picks", icon: IconChart },
+  { name: "Historique Algo", href: "/picks", icon: IconChart },
   { name: "Chat", href: "/chat", icon: IconMessage },
   {
     name: "Users",
@@ -24,7 +24,6 @@ export const navItems = [
     children: [
       { name: "Profil", href: "/users", icon: IconUsers },
       { name: "Bankroll", href: "/bankroll", icon: IconWallet },
-      { name: "Historique Picks", href: "/picks", icon: IconChart },
       { name: "Admin Data", href: "/admin-data", icon: IconDatabase },
     ],
   },

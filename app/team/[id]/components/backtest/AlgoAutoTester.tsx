@@ -56,6 +56,9 @@ type ResultStats = {
   hitRate: number;
   coverage: number;
   evaluated: number;
+  avgProbability: number;
+  valueScore: number;
+  roiScore: number;
 };
 
 type AutoTestRow = {
@@ -83,6 +86,7 @@ function computeStatsBySeason(
   let picks = 0;
   let hits = 0;
   let evaluated = 0;
+  let probabilitySum = 0;
 
   seasons.forEach((season) => {
     const seasonFixtures = fixturesBySeason[season] ?? [];
@@ -94,16 +98,23 @@ function computeStatsBySeason(
     picks += filtered.length;
     hits += seasonHits;
     evaluated += allPicks.length;
+    probabilitySum += filtered.reduce((sum, pick) => sum + (pick.probability || 0), 0);
   });
 
   const hitRate = picks ? hits / picks : 0;
   const coverage = evaluated ? picks / evaluated : 0;
-  return { picks, hits, hitRate, coverage, evaluated };
+  const avgProbability = picks ? probabilitySum / picks : 0;
+  const valueScore = avgProbability - settings.threshold;
+  const roiScore = hitRate * avgProbability;
+  return { picks, hits, hitRate, coverage, evaluated, avgProbability, valueScore, roiScore };
 }
 
-function buildCandidateSettings(count: number, lineSets: MarketLine[][]) {
+function buildCandidateSettings(
+  count: number,
+  lineSets: MarketLine[][],
+  weightModes: Array<"soft" | "medium" | "hard"> = ["soft", "medium", "hard"]
+) {
   const combos: AlgoSettings[] = [];
-  const weightModes: Array<"soft" | "medium" | "hard"> = ["soft", "medium", "hard"];
 
   for (const windowSize of WINDOWS) {
     for (const bucketSize of BUCKETS) {
@@ -142,9 +153,11 @@ function buildCandidateSettings(count: number, lineSets: MarketLine[][]) {
   return combos.slice(0, count);
 }
 
-function buildAllSettings(lineSets: MarketLine[][]) {
+function buildAllSettings(
+  lineSets: MarketLine[][],
+  weightModes: Array<"soft" | "medium" | "hard"> = ["soft", "medium", "hard"]
+) {
   const combos: AlgoSettings[] = [];
-  const weightModes: Array<"soft" | "medium" | "hard"> = ["soft", "medium", "hard"];
 
   for (const windowSize of WINDOWS) {
     for (const bucketSize of BUCKETS) {
@@ -458,39 +471,101 @@ export default function AlgoAutoTester({
     setAnalysisText(null);
     setAnalysisError(null);
 
-    const totalCount =
+    const phase1WeightModes: Array<"soft" | "medium" | "hard"> = ["soft"];
+    const phase2WeightModes: Array<"soft" | "medium" | "hard"> = ["soft", "medium", "hard"];
+    const lineVariantCount = Math.max(1, availableLineSets.length || selectedLineList.length);
+    const phase1Count =
       WINDOWS.length *
       BUCKETS.length *
       THRESHOLDS.length *
       MIN_MATCHES.length *
       MIN_LEAGUE_MATCHES.length *
-      Math.max(1, availableLineSets.length || selectedLineList.length) *
-      3;
+      lineVariantCount *
+      phase1WeightModes.length;
+    const phase2Count = 50 * phase2WeightModes.length;
+    const totalCount = phase1Count + phase2Count;
 
     startOverlay(totalCount, () => {
       setTimeout(() => {
-        const candidates = buildAllSettings(availableLineSets);
-        const computed = candidates.map((settings, index) => ({
-          id: `full-${index}`,
-          settings,
-          stats: computeStatsBySeason(seasons, fixturesBySeason, teamId, settings),
-        }));
-        const filtered = computed.filter(
-          (row) => row.stats.hitRate >= 0.8 && row.stats.hitRate <= 1
+        const rankRows = (list: AutoTestRow[]) =>
+          list
+            .slice()
+            .sort((a, b) => {
+              if (b.stats.roiScore !== a.stats.roiScore)
+                return b.stats.roiScore - a.stats.roiScore;
+              if (b.stats.hitRate !== a.stats.hitRate)
+                return b.stats.hitRate - a.stats.hitRate;
+              if (b.stats.valueScore !== a.stats.valueScore)
+                return b.stats.valueScore - a.stats.valueScore;
+              if (b.stats.picks !== a.stats.picks) return b.stats.picks - a.stats.picks;
+              return b.stats.coverage - a.stats.coverage;
+            });
+
+        // Phase 1: broad search with single weight mode
+        const startTime = Date.now();
+        const maxMs = 60_000;
+        const phase1BudgetMs = 40_000;
+
+        const phase1Candidates = buildAllSettings(availableLineSets, phase1WeightModes);
+        const phase1Computed: AutoTestRow[] = [];
+        for (let index = 0; index < phase1Candidates.length; index += 1) {
+          if (Date.now() - startTime > phase1BudgetMs) break;
+          const settings = phase1Candidates[index];
+          phase1Computed.push({
+            id: `phase1-${index}`,
+            settings,
+            stats: computeStatsBySeason(seasons, fixturesBySeason, teamId, settings),
+          });
+        }
+        const phase1Filtered = phase1Computed.filter(
+          (row) =>
+            row.stats.hitRate >= 0.8 &&
+            row.stats.hitRate <= 1 &&
+            row.stats.coverage >= 0.3
         );
-        const sorted = filtered
-          .slice()
-          .sort((a, b) => {
-            if (b.stats.picks !== a.stats.picks) return b.stats.picks - a.stats.picks;
-            if (b.stats.hitRate !== a.stats.hitRate) return b.stats.hitRate - a.stats.hitRate;
-            return b.stats.coverage - a.stats.coverage;
-          })
-          .slice(0, Math.max(1, resultLimit));
-        setResults(sorted);
+        const topPhase1 = rankRows(phase1Filtered).slice(0, 50);
+
+        // Phase 2: refine best 50 with all weight modes
+        const phase2Candidates: AlgoSettings[] = [];
+        topPhase1.forEach((row) => {
+          const buckets = Math.max(1, Math.ceil(row.settings.windowSize / row.settings.bucketSize));
+          phase2WeightModes.forEach((mode) => {
+            phase2Candidates.push(
+              normalizeAlgoSettings({
+                ...row.settings,
+                weights: createWeightProfile(buckets, mode),
+              })
+            );
+          });
+        });
+        const unique = new Map<string, AlgoSettings>();
+        phase2Candidates.forEach((settings) => {
+          unique.set(JSON.stringify(settings), settings);
+        });
+        const finalCandidates = Array.from(unique.values());
+        const phase2Computed: AutoTestRow[] = [];
+        for (let index = 0; index < finalCandidates.length; index += 1) {
+          if (Date.now() - startTime > maxMs) break;
+          const settings = finalCandidates[index];
+          phase2Computed.push({
+            id: `phase2-${index}`,
+            settings,
+            stats: computeStatsBySeason(seasons, fixturesBySeason, teamId, settings),
+          });
+        }
+        const phase2Filtered = phase2Computed.filter(
+          (row) =>
+            row.stats.hitRate >= 0.8 &&
+            row.stats.hitRate <= 1 &&
+            row.stats.coverage >= 0.3
+        );
+
+        const finalSorted = rankRows(phase2Filtered).slice(0, Math.max(1, resultLimit));
+        setResults(finalSorted);
         setRunSummary({
-          calcCount: computed.length,
+          calcCount: phase1Computed.length + phase2Computed.length,
           lineVariants: availableLineSets.length || selectedLineList.length,
-          weightVariants: 3,
+          weightVariants: phase2WeightModes.length,
           mode: "full",
         });
         setRunning(false);
@@ -504,8 +579,8 @@ export default function AlgoAutoTester({
             seasonMode,
             minCoverage,
             lines: selectedLineList,
-            results: sorted.map((row) => ({ settings: row.settings, stats: row.stats })),
-            calcCount: computed.length,
+            results: finalSorted.map((row) => ({ settings: row.settings, stats: row.stats })),
+            calcCount: phase1Computed.length + phase2Computed.length,
           },
         });
       }, 0);
@@ -537,14 +612,17 @@ export default function AlgoAutoTester({
     return () => window.clearTimeout(timeoutId);
   }, [results.length]);
 
-  const bestResult = useMemo(() => {
+    const bestResult = useMemo(() => {
     if (!results.length) return null;
     const eligible = results.filter((row) => row.stats.coverage >= minCoverage);
     const list = eligible.length ? eligible : results;
     return list
       .slice()
       .sort((a, b) => {
+        if (b.stats.roiScore !== a.stats.roiScore) return b.stats.roiScore - a.stats.roiScore;
         if (b.stats.hitRate !== a.stats.hitRate) return b.stats.hitRate - a.stats.hitRate;
+        if (b.stats.valueScore !== a.stats.valueScore)
+          return b.stats.valueScore - a.stats.valueScore;
         return b.stats.coverage - a.stats.coverage;
       })[0];
   }, [results, minCoverage]);
@@ -553,8 +631,11 @@ export default function AlgoAutoTester({
     return results
       .slice()
       .sort((a, b) => {
-        if (b.stats.picks !== a.stats.picks) return b.stats.picks - a.stats.picks;
+        if (b.stats.roiScore !== a.stats.roiScore) return b.stats.roiScore - a.stats.roiScore;
         if (b.stats.hitRate !== a.stats.hitRate) return b.stats.hitRate - a.stats.hitRate;
+        if (b.stats.valueScore !== a.stats.valueScore)
+          return b.stats.valueScore - a.stats.valueScore;
+        if (b.stats.picks !== a.stats.picks) return b.stats.picks - a.stats.picks;
         return b.stats.coverage - a.stats.coverage;
       })
       .slice(0, Math.max(1, resultLimit));
@@ -894,7 +975,7 @@ export default function AlgoAutoTester({
                     </div>
                     <div className="ml-auto flex items-center gap-3">
                       <div className="text-blue-300 font-semibold whitespace-nowrap">
-                        Hit {(row.stats.hitRate * 100).toFixed(1)}% • Cov {(row.stats.coverage * 100).toFixed(1)}% • {row.stats.hits}/{row.stats.picks}
+                        Hit {(row.stats.hitRate * 100).toFixed(1)}% • Cov {(row.stats.coverage * 100).toFixed(1)}% • {row.stats.hits}/{row.stats.picks} • ROI {(row.stats.roiScore * 100).toFixed(1)}% • Value {(row.stats.valueScore * 100).toFixed(1)}%
                       </div>
                       <button
                         type="button"

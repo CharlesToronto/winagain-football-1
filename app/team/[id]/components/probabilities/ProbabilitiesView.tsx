@@ -16,7 +16,6 @@ import CardOverUnderTeamHomeAway from "./CardOverUnderTeamHomeAway";
 import CardGoalsSplit from "./CardGoalsSplit";
 import CardHalfWinRate from "./CardHalfWinRate";
 import HalfWinTrendCard from "./HalfWinTrendCard";
-import AiPromptButton from "./AiPromptButton";
 import ConfidenceBadgeTrigger from "./ConfidenceBadgeTrigger";
 
 import { getProbabilityEngines } from "@/lib/adapters/probabilities";
@@ -419,7 +418,6 @@ export default function ProbabilitiesView({
           >
             <div className="snap-start shrink-0 w-full">
               <div className="space-y-2">
-            <AiPromptButton onClick={() => handleAiPrompt("Résultats")} />
                 <div className={cardBorderClass}>
                   <CardResultSimple
                     data={stats}
@@ -439,7 +437,6 @@ export default function ProbabilitiesView({
             </div>
             <div className="snap-start shrink-0 w-full">
               <div className="space-y-2">
-                <AiPromptButton onClick={() => handleAiPrompt("Double chance")} />
                 <div className={cardBorderClass}>
                   <CardDoubleChance
                     data={stats}
@@ -460,7 +457,6 @@ export default function ProbabilitiesView({
           </div>
         </div>
         <div className="space-y-2">
-          <AiPromptButton onClick={() => handleAiPrompt("Buts marqués / Encaissés")} />
           <div className={cardBorderClass}>
             <CardGoalsSplit fixtures={fixtures ?? []} />
           </div>
@@ -469,7 +465,6 @@ export default function ProbabilitiesView({
 
       <div className="hidden md:grid md:grid-cols-3 gap-6">
         <div className="space-y-2">
-          <AiPromptButton onClick={() => handleAiPrompt("Résultats")} />
           <div className={cardBorderClass}>
             <CardResultSimple
               data={stats}
@@ -487,13 +482,11 @@ export default function ProbabilitiesView({
           </div>
         </div>
         <div className="space-y-2">
-          <AiPromptButton onClick={() => handleAiPrompt("Buts marqués / Encaissés")} />
           <div className={cardBorderClass}>
             <CardGoalsSplit fixtures={fixtures ?? []} />
           </div>
         </div>
         <div className="space-y-2">
-          <AiPromptButton onClick={() => handleAiPrompt("Double chance")} />
           <div className={cardBorderClass}>
             <CardDoubleChance
               data={stats}
@@ -528,7 +521,6 @@ export default function ProbabilitiesView({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <AiPromptButton onClick={() => handleAiPrompt("Over / Under")} />
             <ConfidenceBadgeTrigger
               activeCount={badgeActiveCount}
               totalCount={totalBadgeCount}
@@ -549,7 +541,6 @@ export default function ProbabilitiesView({
         </div>
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <AiPromptButton onClick={() => handleAiPrompt("Over / Under (Home/Away)")} />
             <ConfidenceBadgeTrigger
               activeCount={badgeActiveCount}
               totalCount={totalBadgeCount}
@@ -583,14 +574,6 @@ export default function ProbabilitiesView({
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="space-y-2">
-          <AiPromptButton
-            onClick={() =>
-              handleAiPrompt(
-                "Over / Under équipe",
-                `${teamGoalsLabel} | Mode ${filter}`
-              )
-            }
-          />
           <div className={cardBorderClass}>
             <CardOverUnderTeam
               fixtures={fixtures ?? []}
@@ -605,14 +588,6 @@ export default function ProbabilitiesView({
           </div>
         </div>
         <div className="space-y-2">
-          <AiPromptButton
-            onClick={() =>
-              handleAiPrompt(
-                "Over / Under équipe (Home/Away)",
-                `${teamGoalsLabel} | Home/Away | Mode ${filter}`
-              )
-            }
-          />
           <div className={cardBorderClass}>
             <CardOverUnderTeamHomeAway
               fixtures={fixtures ?? []}
@@ -663,7 +638,6 @@ export default function ProbabilitiesView({
 
       <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
         <div className="space-y-2 md:col-span-2">
-          <AiPromptButton onClick={() => handleAiPrompt("Mi-temps gagnee")} />
           <div className={cardBorderClass}>
             <CardHalfWinRate
               fixtures={fixtures ?? []}
@@ -676,9 +650,6 @@ export default function ProbabilitiesView({
           </div>
         </div>
         <div className="space-y-2 md:col-span-3">
-          <AiPromptButton
-            onClick={() => handleAiPrompt("Tendance mi-temps gagnee")}
-          />
           <div className={cardBorderClass}>
             <HalfWinTrendCard
               fixtures={fixtures ?? []}

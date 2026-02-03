@@ -10,11 +10,12 @@ type PickRow = {
   fixture_id: number;
   league_id: number | null;
   competition_name: string | null;
+  competition_country?: string | null;
   team_id?: number | null;
   home_name: string | null;
   away_name: string | null;
   pick: string;
-  market: "over_under" | "double_chance" | null;
+  market: string | null;
   odd: number | null;
   probability?: number | null;
   hit_rate?: number | null;
@@ -34,64 +35,122 @@ const oddsFilterOptions = [
   { key: "with_odds", label: "Odds ≥ 1.18" },
 ] as const;
 
-const marketOptions = [
-  { key: "all", label: "Tous marchés" },
-  { key: "over_under", label: "Over / Under" },
-  { key: "double_chance", label: "Double Chance" },
-] as const;
+  const marketOptions = [
+    { key: "all", label: "Tous marchés" },
+    { key: "over_under", label: "Over / Under" },
+    { key: "double_chance", label: "Double Chance" },
+    { key: "1x2", label: "1X2" },
+    { key: "btts", label: "BTTS" },
+    { key: "dnb", label: "DNB" },
+    { key: "team_total", label: "Team Total" },
+  ] as const;
 
-const dayOptions = [7, 30, 90];
+const ALL_DAYS = 36500;
 const MIN_COMBO_ODDS = 1.75;
 const MAX_COMBO_ODDS = 3;
-const MAX_COMBO_CANDIDATES = 18;
-const MAX_COMBOS = 6;
+const MAX_COMBO_CANDIDATES = Number.POSITIVE_INFINITY;
+const MAX_COMBOS = Number.POSITIVE_INFINITY;
 const BASE_BANKROLL = 1000;
 const STAKE = 10;
 const MIN_ODDS_FILTER = 1.18;
+const COMBO_BLACKLIST = new Set([
+  "Israel|||Liga Leumit",
+  "Romania|||Liga I",
+  "Belgium|||Jupiler Pro League",
+  "Hungary|||NB II",
+  "Serbia|||Super Liga",
+  "Poland|||Ekstraklasa",
+]);
+const DISCOURAGED_COMPETITIONS = new Set([
+  "Israel|||Liga Leumit",
+  "Scotland|||Football League - Highland League",
+  "Scotland|||League One",
+  "Belgium|||Challenger Pro League",
+  "Hungary|||NB II",
+  "Italy|||Serie C - Girone A",
+]);
 
 type Combo = {
   legs: PickRow[];
   totalOdd: number;
   avgHitRate: number;
+  status?: "hit" | "miss" | "pending";
+  snapshotDate?: string;
 };
 
 export default function PicksHistoryPage() {
   const [items, setItems] = useState<PickRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [snapshotLoading, setSnapshotLoading] = useState(false);
-  const [snapshotMessage, setSnapshotMessage] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [showPickList, setShowPickList] = useState(false);
+  const [showMarketExclusions, setShowMarketExclusions] = useState(false);
+  const [excludedMarkets, setExcludedMarkets] = useState<string[]>([]);
+  const [excludedLines, setExcludedLines] = useState<string[]>([]);
+  const [excludedPickCodes, setExcludedPickCodes] = useState<string[]>([]);
+  const algoVersion = "v3";
   const [criteria, setCriteria] = useState<"all" | "rose" | "yellow">("all");
-  const [market, setMarket] = useState<"all" | "over_under" | "double_chance">("all");
+  const [market, setMarket] = useState<
+    "all" | "over_under" | "double_chance" | "1x2" | "btts" | "dnb" | "team_total"
+  >("all");
   const [oddsFilter, setOddsFilter] = useState<"all" | "with_odds">("all");
-  const [days, setDays] = useState(30);
-  const historyUrl = useMemo(
-    () => `/api/picks/history?days=${days}&criteria=${criteria}&market=${market}&v=${refreshKey}`,
-    [criteria, market, days, refreshKey]
-  );
-  const dailyAlgoUrl = useMemo(() => {
-    const base =
-      process.env.NEXT_PUBLIC_BASE_URL ||
-      (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000");
-    return `${base.replace(/\/$/, "")}/api/jobs/daily-algo?task=all`;
-  }, []);
-
+  const days = ALL_DAYS;
+  const historyUrl = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set("days", String(days));
+    params.set("criteria", criteria);
+    if (market !== "all") params.set("market", market);
+    params.set("algo", algoVersion);
+    params.set("v", String(refreshKey));
+    return `/api/picks/history?${params.toString()}`;
+  }, [criteria, market, days, refreshKey, algoVersion]);
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError(null);
-    fetch(historyUrl, { cache: "no-store" })
-      .then(async (res) => {
-        const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(body?.error || "Erreur chargement historique");
-        }
-        return body;
-      })
-      .then((data) => {
+    const fetchJson = async (url: string) => {
+      const res = await fetch(url, { cache: "no-store" });
+      const raw = await res.text();
+      const cleaned = raw.replace(/^\uFEFF/, "").trim();
+      let body: any = {};
+      try {
+        body = cleaned ? JSON.parse(cleaned) : {};
+      } catch {
+        throw new Error("Réponse JSON invalide.");
+      }
+      if (!res.ok) {
+        throw new Error(body?.error || "Erreur chargement historique");
+      }
+      return body;
+    };
+
+    fetchJson(historyUrl)
+      .then(async (data) => {
         if (!active) return;
-        setItems(Array.isArray(data?.items) ? data.items : []);
+        let items = Array.isArray(data?.items) ? data.items : [];
+        if (market === "all" && items.length === 0) {
+          const baseParams = new URLSearchParams();
+          baseParams.set("days", String(days));
+          baseParams.set("criteria", criteria);
+          baseParams.set("algo", algoVersion);
+          const fallbackMarkets = ["over_under", "double_chance", "1x2", "btts", "dnb", "team_total"];
+          const results = await Promise.all(
+            fallbackMarkets.map((m) => {
+              const params = new URLSearchParams(baseParams);
+              params.set("market", m);
+              return fetchJson(`/api/picks/history?${params.toString()}`);
+            })
+          );
+          const merged = new Map<string, any>();
+          results.forEach((resBody) => {
+            const list = Array.isArray(resBody?.items) ? resBody.items : [];
+            list.forEach((row: any) => {
+              if (row?.id) merged.set(String(row.id), row);
+            });
+          });
+          items = Array.from(merged.values());
+        }
+        setItems(items);
       })
       .catch((err: any) => {
         if (!active) return;
@@ -107,35 +166,193 @@ export default function PicksHistoryPage() {
     };
   }, [historyUrl]);
 
-  const runManualSnapshot = async () => {
-    setSnapshotLoading(true);
-    setSnapshotMessage(null);
-    try {
-      const res = await fetch(dailyAlgoUrl, { method: "GET" });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
-      setSnapshotMessage(
-        `Snapshot OK (nouveaux: ${body?.created ?? "?"}, maj: ${body?.updated ?? "?"}, resolved: ${body?.resolved ?? "?"})`
-      );
-      setRefreshKey((prev) => prev + 1);
-    } catch (err: any) {
-      setSnapshotMessage(err?.message ?? "Erreur snapshot");
-    } finally {
-      setSnapshotLoading(false);
-    }
-  };
+  useEffect(() => {
+    setCriteria("all");
+    setMarket("all");
+    setOddsFilter("all");
+    setExcludedMarkets([]);
+    setExcludedLines([]);
+    setExcludedPickCodes([]);
+    setRefreshKey((prev) => prev + 1);
+  }, [algoVersion]);
+
+  function extractPickLineLabel(pick: string) {
+    const match = String(pick ?? "").match(/([0-9]+(?:[.,][0-9]+)?)/);
+    if (!match) return null;
+    const value = match[1].replace(",", ".");
+    return value;
+  }
+
+  function extractPickCode(pick: string) {
+    const trimmed = String(pick ?? "").trim().toUpperCase();
+    if (trimmed === "1X" || trimmed === "X2" || trimmed === "12") return trimmed;
+    return null;
+  }
 
   const displayItems = useMemo(() => {
+    let next = items;
     if (oddsFilter === "with_odds") {
-      return items.filter((row) => Number(row.odd) >= MIN_ODDS_FILTER);
+      next = next.filter((row) => Number(row.odd) >= MIN_ODDS_FILTER);
     }
-    return items;
-  }, [items, oddsFilter]);
+    if (excludedMarkets.length) {
+      next = next.filter((row) => !excludedMarkets.includes(String(row.market ?? "")));
+    }
+    if (excludedLines.length || excludedPickCodes.length) {
+      next = next.filter((row) => {
+        const pick = String(row.pick ?? "");
+        const line = extractPickLineLabel(pick);
+        if (line && excludedLines.includes(line)) return false;
+        const code = extractPickCode(pick);
+        if (code && excludedPickCodes.includes(code)) return false;
+        return true;
+      });
+    }
+    if (algoVersion === "v3" && items.length > 0 && next.length === 0) {
+      return items;
+    }
+    return next;
+  }, [items, oddsFilter, excludedMarkets, excludedLines, excludedPickCodes, algoVersion]);
+
+  const filteredStatsItems = useMemo(() => {
+    return displayItems.filter((row) => {
+      const country = row.competition_country ?? "";
+      const name = row.competition_name ?? "";
+      if (!country || !name) return true;
+      return !DISCOURAGED_COMPETITIONS.has(`${country}|||${name}`);
+    });
+  }, [displayItems]);
+
+  const displayItemsSorted = useMemo(() => {
+    return [...displayItems].sort((a, b) => {
+      const aDate = a.fixture_date_utc ? new Date(a.fixture_date_utc).getTime() : 0;
+      const bDate = b.fixture_date_utc ? new Date(b.fixture_date_utc).getTime() : 0;
+      return bDate - aDate;
+    });
+  }, [displayItems]);
 
   const resolved = useMemo(
-    () => displayItems.filter((row) => row.status === "hit" || row.status === "miss"),
-    [displayItems]
+    () => filteredStatsItems.filter((row) => row.status === "hit" || row.status === "miss"),
+    [filteredStatsItems]
   );
+
+  const downloadCsv = (scope: "all" | "hit" | "miss") => {
+    const source =
+      scope === "all"
+        ? displayItems
+        : resolved.filter((row) => row.status === scope);
+    if (!source.length) return;
+
+    const columns: Array<keyof PickRow> = [
+      "id",
+      "snapshot_date",
+      "fixture_date_utc",
+      "fixture_id",
+      "league_id",
+      "competition_name",
+      "team_id",
+      "home_name",
+      "away_name",
+      "pick",
+      "market",
+      "odd",
+      "probability",
+      "hit_rate",
+      "meets_criteria",
+      "status",
+      "hit",
+    ];
+
+    const escapeCell = (value: any) => {
+      const str = value == null ? "" : String(value);
+      if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+      return str;
+    };
+
+    const header = columns.join(",");
+    const rows = source.map((row) =>
+      columns.map((col) => escapeCell((row as any)[col])).join(",")
+    );
+    const csv = [header, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const dateLabel = new Date().toISOString().slice(0, 10);
+    const suffix = scope === "all" ? "tous" : scope === "hit" ? "gagnes" : "perdus";
+    link.href = url;
+    link.download = `picks_${suffix}_${dateLabel}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const analyzedMatches = useMemo(() => {
+    const ids = new Set<number>();
+    displayItems.forEach((row) => {
+      const id = Number(row.fixture_id);
+      if (Number.isFinite(id)) ids.add(id);
+    });
+    return ids.size;
+  }, [displayItems]);
+
+  const availableMarkets = useMemo(() => {
+    const unique = new Set<string>();
+    items.forEach((row) => {
+      const key = String(row.market ?? "").trim();
+      if (key) unique.add(key);
+    });
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
+  }, [items]);
+
+  const marketLabel = (value: string) => {
+    if (value === "over_under") return "Over / Under";
+    if (value === "double_chance") return "Double Chance";
+    if (value === "1x2") return "1X2";
+    if (value === "btts") return "BTTS";
+    if (value === "dnb") return "DNB";
+    if (value === "team_total") return "Team Total";
+    if (value === "other") return "Autre";
+    return value;
+  };
+
+  const toggleMarketExclusion = (value: string) => {
+    setExcludedMarkets((prev) =>
+      prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]
+    );
+  };
+
+  const availableLines = useMemo(() => {
+    const unique = new Set<string>();
+    items.forEach((row) => {
+      const line = extractPickLineLabel(String(row.pick ?? ""));
+      if (line) unique.add(line);
+    });
+    const allowed = new Set(["1.5", "2.5", "3.5", "4.5"]);
+    return Array.from(unique)
+      .filter((value) => allowed.has(value))
+      .sort((a, b) => Number(a) - Number(b));
+  }, [items]);
+
+  const availablePickCodes = useMemo(() => {
+    const unique = new Set<string>();
+    items.forEach((row) => {
+      const code = extractPickCode(String(row.pick ?? ""));
+      if (code) unique.add(code);
+    });
+    return Array.from(unique).sort();
+  }, [items]);
+
+  const toggleLineExclusion = (value: string) => {
+    setExcludedLines((prev) =>
+      prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]
+    );
+  };
+
+  const togglePickCodeExclusion = (value: string) => {
+    setExcludedPickCodes((prev) =>
+      prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]
+    );
+  };
 
   const stats = useMemo(() => {
     const totalDisplay = displayItems.length;
@@ -189,6 +406,8 @@ export default function PicksHistoryPage() {
       }
       return { x: idx, y: Number(capital.toFixed(2)) };
     });
+    const finalCapital = points.length ? points[points.length - 1].y : BASE_BANKROLL;
+    const roiPct = ((finalCapital - BASE_BANKROLL) / BASE_BANKROLL) * 100;
     const hitRate = total ? (hits / total) * 100 : 0;
     const pickGroups = resolved.reduce<Record<string, { total: number; hits: number }>>(
       (acc, row) => {
@@ -227,11 +446,41 @@ export default function PicksHistoryPage() {
       oddsUnder118HitRate,
       oddsUnder118Pct,
       hitRate,
+      roiPct,
       points,
       topPick,
       pickEntries,
     };
   }, [resolved, displayItems]);
+
+  const competitionStats = useMemo(() => {
+    const totals = new Map<string, { total: number; hits: number }>();
+    displayItems.forEach((row) => {
+      const country = row.competition_country ?? "Inconnu";
+      const name = row.competition_name ?? "Competition";
+      const key = `${country}|||${name}`;
+      const current = totals.get(key) ?? { total: 0, hits: 0 };
+      current.total += 1;
+      if (row.status === "hit") current.hits += 1;
+      totals.set(key, current);
+    });
+    const result = Array.from(totals.entries()).map(([key, data]) => {
+      const [country, name] = key.split("|||");
+      const hitRate = data.total ? (data.hits / data.total) * 100 : 0;
+      const share = displayItems.length ? (data.total / displayItems.length) * 100 : 0;
+      return { country, name, total: data.total, hits: data.hits, hitRate, share };
+    });
+    return result.sort((a, b) => b.total - a.total);
+  }, [displayItems]);
+
+  const competitionSummary = useMemo(() => {
+    const totalPicks = displayItems.length;
+    const totalHits = displayItems.filter((row) => row.status === "hit").length;
+    const hitRate = totalPicks ? (totalHits / totalPicks) * 100 : 0;
+    const totalCompetitions = competitionStats.length;
+    const avgPicks = totalCompetitions ? totalPicks / totalCompetitions : 0;
+    return { totalPicks, totalHits, hitRate, totalCompetitions, avgPicks };
+  }, [displayItems, competitionStats]);
 
   const latestSnapshot = useMemo(() => {
     if (!displayItems.length) return "";
@@ -252,6 +501,98 @@ export default function PicksHistoryPage() {
       .sort((a, b) => (Number(b.probability) || 0) - (Number(a.probability) || 0))
       .slice(0, MAX_COMBO_CANDIDATES);
   }, [displayItems, latestSnapshot]);
+
+  const buildComboCandidates = (rows: PickRow[]) => {
+    const filtered = rows.filter((row) => {
+      const country = row.competition_country ?? "";
+      const name = row.competition_name ?? "";
+      if (!country || !name) return false;
+      if (COMBO_BLACKLIST.has(`${country}|||${name}`)) return false;
+      const odd = Number(row.odd);
+      return Number.isFinite(odd) && odd > 1;
+    });
+    const sorted = filtered.sort(
+      (a, b) => (Number(b.probability) || 0) - (Number(a.probability) || 0)
+    );
+    if (Number.isFinite(MAX_COMBO_CANDIDATES) && MAX_COMBO_CANDIDATES > 0) {
+      return sorted.slice(0, MAX_COMBO_CANDIDATES);
+    }
+    return sorted;
+  };
+
+  const buildCombosForCandidates = (candidates: PickRow[], legsCount = 2) => {
+    const combosLocal: Combo[] = [];
+    const n = candidates.length;
+    const inOddRange = (value: number) => value >= MIN_COMBO_ODDS && value <= MAX_COMBO_ODDS;
+
+    const hasDuplicateTeam = (legs: PickRow[]) => {
+      const seen = new Set<number>();
+      for (const leg of legs) {
+        const teamId = Number(leg.team_id);
+        if (!Number.isFinite(teamId)) continue;
+        if (seen.has(teamId)) return true;
+        seen.add(teamId);
+      }
+      return false;
+    };
+
+    const hasDuplicateFixture = (legs: PickRow[]) => {
+      const seen = new Set<number>();
+      for (const leg of legs) {
+        const fixtureId = Number(leg.fixture_id);
+        if (!Number.isFinite(fixtureId)) continue;
+        if (seen.has(fixtureId)) return true;
+        seen.add(fixtureId);
+      }
+      return false;
+    };
+
+    const hasDuplicateFixtureMarket = (legs: PickRow[]) => {
+      const seen = new Set<string>();
+      for (const leg of legs) {
+        const fixtureId = Number(leg.fixture_id);
+        const market = String(leg.market ?? "");
+        if (!Number.isFinite(fixtureId) || !market) continue;
+        const key = `${fixtureId}:${market}`;
+        if (seen.has(key)) return true;
+        seen.add(key);
+      }
+      return false;
+    };
+
+    const avgHitRate = (legs: PickRow[]) => {
+      if (!legs.length) return 0;
+      const total = legs.reduce((sum, leg) => sum + (Number(leg.hit_rate) || 0), 0);
+      return total / legs.length;
+    };
+
+    if (legsCount === 2) {
+      for (let i = 0; i < n - 1; i += 1) {
+        const oddA = Number(candidates[i].odd);
+        if (!Number.isFinite(oddA)) continue;
+        for (let j = i + 1; j < n; j += 1) {
+          const oddB = Number(candidates[j].odd);
+          if (!Number.isFinite(oddB)) continue;
+          const totalOdd = Number((oddA * oddB).toFixed(2));
+          if (!inOddRange(totalOdd)) continue;
+          const legs = [candidates[i], candidates[j]];
+            if (hasDuplicateFixture(legs)) continue;
+            if (hasDuplicateFixtureMarket(legs)) continue;
+            if (hasDuplicateTeam(legs)) continue;
+            combosLocal.push({
+              legs,
+              totalOdd,
+              avgHitRate: avgHitRate(legs),
+            });
+        }
+      }
+    }
+
+    return combosLocal.sort((a, b) => {
+      if (b.avgHitRate !== a.avgHitRate) return b.avgHitRate - a.avgHitRate;
+      return a.totalOdd - b.totalOdd;
+    });
+  };
 
   const combos = useMemo(() => {
     const results: Combo[] = [];
@@ -285,8 +626,6 @@ export default function PicksHistoryPage() {
       return total / legs.length;
     };
 
-    const inOddRange = (value: number) => value >= MIN_COMBO_ODDS && value <= MAX_COMBO_ODDS;
-
     const rankCombos = (list: Combo[]) =>
       list.sort((a, b) => {
         if (b.avgHitRate !== a.avgHitRate) return b.avgHitRate - a.avgHitRate;
@@ -294,54 +633,7 @@ export default function PicksHistoryPage() {
       });
 
     const buildCombos = (legsCount: number) => {
-      const combosLocal: Combo[] = [];
-      const n = comboCandidates.length;
-      if (legsCount === 2) {
-        for (let i = 0; i < n - 1; i += 1) {
-          const oddA = Number(comboCandidates[i].odd);
-          if (!Number.isFinite(oddA)) continue;
-          for (let j = i + 1; j < n; j += 1) {
-            const oddB = Number(comboCandidates[j].odd);
-            if (!Number.isFinite(oddB)) continue;
-            const totalOdd = Number((oddA * oddB).toFixed(2));
-            if (!inOddRange(totalOdd)) continue;
-            const legs = [comboCandidates[i], comboCandidates[j]];
-            if (hasDuplicateFixture(legs)) continue;
-            if (hasDuplicateTeam(legs)) continue;
-            combosLocal.push({
-              legs,
-              totalOdd,
-              avgHitRate: avgHitRate(legs),
-            });
-          }
-        }
-      }
-      if (legsCount === 3) {
-        for (let i = 0; i < n - 2; i += 1) {
-          const oddA = Number(comboCandidates[i].odd);
-          if (!Number.isFinite(oddA)) continue;
-          for (let j = i + 1; j < n - 1; j += 1) {
-            const oddB = Number(comboCandidates[j].odd);
-            if (!Number.isFinite(oddB)) continue;
-            for (let k = j + 1; k < n; k += 1) {
-              const oddC = Number(comboCandidates[k].odd);
-              if (!Number.isFinite(oddC)) continue;
-              const totalOdd = Number((oddA * oddB * oddC).toFixed(2));
-              if (!inOddRange(totalOdd)) continue;
-              const legs = [comboCandidates[i], comboCandidates[j], comboCandidates[k]];
-              if (hasDuplicateFixture(legs)) continue;
-              if (hasDuplicateTeam(legs)) continue;
-              const hasElite = legs.some((leg) => (Number(leg.hit_rate) || 0) >= 0.9);
-              if (!hasElite) continue;
-              combosLocal.push({
-                legs,
-                totalOdd,
-                avgHitRate: avgHitRate(legs),
-              });
-            }
-          }
-        }
-      }
+      const combosLocal = buildCombosForCandidates(comboCandidates, legsCount);
       return rankCombos(combosLocal);
     };
 
@@ -349,7 +641,10 @@ export default function PicksHistoryPage() {
     const selectCombos = (list: Combo[]) => {
       for (const combo of list) {
         const legsKeys = combo.legs
-          .map((leg) => `${leg.fixture_id}:${leg.pick}`)
+          .map((leg) => {
+            const market = String(leg.market ?? "");
+            return `${leg.fixture_id}:${market || leg.pick}`;
+          })
           .filter(Boolean);
         if (legsKeys.some((key) => selectedKeys.has(key))) continue;
         legsKeys.forEach((key) => selectedKeys.add(key));
@@ -367,10 +662,97 @@ export default function PicksHistoryPage() {
     return results;
   }, [comboCandidates]);
 
+  const combosHistory = useMemo(() => {
+    const grouped = new Map<string, PickRow[]>();
+    displayItems.forEach((row) => {
+      if (!row.snapshot_date) return;
+      const list = grouped.get(row.snapshot_date) ?? [];
+      list.push(row);
+      grouped.set(row.snapshot_date, list);
+    });
+
+    const dates = Array.from(grouped.keys()).sort();
+    const recentDates = dates.slice(-5);
+    const historyCombos: Combo[] = [];
+    recentDates.forEach((date) => {
+      const rows = grouped.get(date) ?? [];
+      const candidates = buildComboCandidates(rows);
+      const dailyCombos = buildCombosForCandidates(candidates, 2);
+      const selectedKeys = new Set<string>();
+      const selectedCombos: Combo[] = [];
+      for (const combo of dailyCombos) {
+        const legsKeys = combo.legs
+          .map((leg) => {
+            const market = String(leg.market ?? "");
+            return `${leg.fixture_id}:${market || leg.pick}`;
+          })
+          .filter(Boolean);
+        if (legsKeys.some((key) => selectedKeys.has(key))) continue;
+        legsKeys.forEach((key) => selectedKeys.add(key));
+        selectedCombos.push(combo);
+        if (selectedCombos.length >= MAX_COMBOS) break;
+      }
+      const limitedCombos = selectedCombos;
+      limitedCombos.forEach((combo) => {
+        const statuses = combo.legs.map((leg) => leg.status);
+        const status = statuses.every((s) => s === "hit")
+          ? "hit"
+          : statuses.some((s) => s === "miss")
+            ? "miss"
+            : "pending";
+        historyCombos.push({ ...combo, status, snapshotDate: date });
+      });
+    });
+    return historyCombos;
+  }, [displayItems]);
+
+  const combosHistoryStats = useMemo(() => {
+    if (!combosHistory.length) {
+      return {
+        total: 0,
+        hits: 0,
+        misses: 0,
+        hitRate: 0,
+        roiPct: 0,
+        avgOdd: 0,
+        points: [],
+      };
+    }
+    const avgOdd =
+      combosHistory.length
+        ? combosHistory.reduce((sum, combo) => sum + (combo.totalOdd || 0), 0) /
+          combosHistory.length
+        : 0;
+    const resolved = combosHistory.filter((c) => c.status === "hit" || c.status === "miss");
+    const hits = resolved.filter((c) => c.status === "hit").length;
+    const misses = resolved.filter((c) => c.status === "miss").length;
+    const hitRate = resolved.length ? (hits / resolved.length) * 100 : 0;
+    let capital = BASE_BANKROLL;
+    const points = resolved.map((combo, idx) => {
+      if (combo.status === "hit") {
+        capital += STAKE * (combo.totalOdd - 1);
+      } else {
+        capital -= STAKE;
+      }
+      return { x: idx, y: Number(capital.toFixed(2)) };
+    });
+    const finalCapital = points.length ? points[points.length - 1].y : BASE_BANKROLL;
+    const roiPct = ((finalCapital - BASE_BANKROLL) / BASE_BANKROLL) * 100;
+    return {
+      total: combosHistory.length,
+      hits,
+      misses,
+      hitRate,
+      roiPct,
+      avgOdd,
+      points,
+    };
+  }, [combosHistory]);
+
   return (
     <div className="min-h-screen w-full p-6 text-white space-y-6">
       <div>
-        <h1 className="text-3xl font-bold text-yellow-400">Historique Picks (Search Algo)</h1>
+        <h1 className="text-3xl font-bold text-white">Historique Algo</h1>
         <p className="text-sm text-white/60">
           Suivi automatique des picks, odds et résultats.
         </p>
@@ -427,40 +809,81 @@ export default function PicksHistoryPage() {
           ))}
         </div>
         <div className="flex items-center gap-2">
-          {dayOptions.map((option) => (
-            <button
-              key={option}
-              type="button"
-              onClick={() => setDays(option)}
-              className={`px-3 py-1 rounded-lg text-sm transition ${
-                days === option
-                  ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
-                  : "bg-white/10 text-white/70 hover:bg-white/20"
-              }`}
-            >
-              {option} jours
-            </button>
-          ))}
+          <span className="px-3 py-1 rounded-lg text-sm bg-white/10 text-white/70">
+            Tous les jours
+          </span>
         </div>
-        <div className="flex items-center gap-2 ml-auto">
-          <button
-            type="button"
-            onClick={runManualSnapshot}
-            disabled={snapshotLoading}
-            className={`px-3 py-1 rounded-lg text-sm transition ${
-              snapshotLoading
-                ? "bg-white/10 text-white/50 cursor-not-allowed"
-                : "bg-pink-500/70 hover:bg-pink-500 text-white"
-            }`}
-          >
-            {snapshotLoading ? "Snapshot..." : "Insérer snapshot"}
-          </button>
-        </div>
+        <div className="ml-auto" />
       </div>
 
-      {snapshotMessage ? (
-        <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/70">
-          {snapshotMessage}
+      {availableMarkets.length || availableLines.length || availablePickCodes.length ? (
+        <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs text-white/60">
+              Exclure marchés
+              {excludedMarkets.length ? ` (${excludedMarkets.length})` : ""}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setExcludedMarkets([]);
+                setExcludedLines([]);
+                setExcludedPickCodes([]);
+              }}
+              className="text-xs text-white/60 hover:text-white"
+            >
+              Tout inclure
+            </button>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-3 text-sm text-white/70">
+            {availableMarkets.map((value) => (
+              <label key={`exclude-${value}`} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={excludedMarkets.includes(value)}
+                  onChange={() => toggleMarketExclusion(value)}
+                  className="accent-rose-400"
+                />
+                <span>{marketLabel(value)}</span>
+              </label>
+            ))}
+          </div>
+          {availableLines.length ? (
+            <div className="mt-3">
+              <div className="text-xs text-white/50">Lignes Over/Under</div>
+              <div className="mt-2 flex flex-wrap gap-3 text-sm text-white/70">
+                {availableLines.map((value) => (
+                  <label key={`exclude-line-${value}`} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={excludedLines.includes(value)}
+                      onChange={() => toggleLineExclusion(value)}
+                      className="accent-rose-400"
+                    />
+                    <span>{value}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {availablePickCodes.length ? (
+            <div className="mt-3">
+              <div className="text-xs text-white/50">Double chance</div>
+              <div className="mt-2 flex flex-wrap gap-3 text-sm text-white/70">
+                {availablePickCodes.map((value) => (
+                  <label key={`exclude-code-${value}`} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={excludedPickCodes.includes(value)}
+                      onChange={() => togglePickCodeExclusion(value)}
+                      className="accent-rose-400"
+                    />
+                    <span>{value}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -470,7 +893,7 @@ export default function PicksHistoryPage() {
         </div>
       ) : null}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="rounded-xl border border-white/10 bg-white/5 p-4">
           <div className="text-xs text-white/60">Picks résolus</div>
           <div className="text-2xl font-semibold">
@@ -492,11 +915,25 @@ export default function PicksHistoryPage() {
             {stats.hitRate.toFixed(1)}%
           </div>
         </div>
+        <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 self-start">
+          <div className="text-[11px] text-white/60">ROI</div>
+          <div
+            className={`text-lg font-semibold ${
+              stats.roiPct >= 0 ? "text-emerald-200" : "text-rose-300"
+            }`}
+          >
+            {stats.roiPct.toFixed(1)}%
+          </div>
+        </div>
         <div className="rounded-xl border border-white/10 bg-white/5 p-4">
           <div className="text-xs text-white/60">Cote moyenne (tous picks)</div>
           <div className="text-2xl font-semibold">{stats.avgOddAll.toFixed(2)}</div>
         </div>
         <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+          <div className="text-xs text-white/60">Matchs analysés</div>
+          <div className="text-2xl font-semibold">{analyzedMatches}</div>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-white/5 p-4 md:col-span-2 xl:col-span-2">
           <div className="text-xs text-white/60">Odds minimum</div>
           <div className="mt-2 space-y-1 text-sm">
             <div className="flex items-center justify-between">
@@ -545,28 +982,125 @@ export default function PicksHistoryPage() {
             </div>
           </div>
         </div>
-        <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+        <div className="rounded-xl border border-white/10 bg-white/5 p-4 md:col-span-2 xl:col-span-2">
           <div className="text-xs text-white/60">Pick le plus sélectionné</div>
-          <div className="text-2xl font-semibold">{stats.topPick}</div>
           {stats.pickEntries.length ? (
-            <div className="mt-3 space-y-1 text-[11px] text-white/70 max-h-40 overflow-y-auto pr-1">
-              {stats.pickEntries
-                .slice()
-                .sort((a, b) => b.count - a.count)
-                .map((entry) => (
+            <div className="mt-2">
+              <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-1 text-[10px] uppercase tracking-wide text-white/40">
+                <span>Pick</span>
+                <span className="text-right">Part</span>
+                <span className="text-right">Hit</span>
+              </div>
+              <div className="mt-1 max-h-40 overflow-y-auto pr-1 divide-y divide-white/10">
+                {stats.pickEntries.map((entry) => (
                   <div
                     key={`pick-${entry.pick}`}
-                    className="flex items-center justify-between gap-2"
+                    className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-3 py-2 text-[11px] text-white/70"
                   >
                     <span className="truncate">{entry.pick}</span>
-                    <span className="text-white/50">
-                      {entry.share.toFixed(1)}% • {entry.hitRate.toFixed(1)}%
+                    <span className="text-right tabular-nums text-white/60">
+                      {entry.share.toFixed(1)}%
+                    </span>
+                    <span className="text-right tabular-nums text-orange-300">
+                      {entry.hitRate.toFixed(1)}%
                     </span>
                   </div>
                 ))}
+              </div>
             </div>
-          ) : null}
+          ) : (
+            <div className="mt-2 text-sm text-white/60">Aucune donnée.</div>
+          )}
         </div>
+        <div className="rounded-xl border border-white/10 bg-white/5 p-4 md:col-span-2 xl:col-span-4">
+          <div className="text-xs text-white/60">Championnats (au moins 1 pick)</div>
+          <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-white/10 bg-black/20">
+            <div className="grid grid-cols-[1.4fr_90px_90px_90px_90px] gap-3 px-3 py-2 text-[10px] uppercase tracking-wide text-white/40">
+              <span>Championnat</span>
+              <span className="text-right">Hits</span>
+              <span className="text-right">Picks</span>
+              <span className="text-right">Hit rate</span>
+              <span className="text-right">Part</span>
+            </div>
+            <div className="divide-y divide-white/10 text-[12px] text-white/70">
+              {competitionStats.length ? (
+                <>
+                  <div className="grid grid-cols-[1.4fr_90px_90px_90px_90px] items-center gap-3 px-3 py-2 text-white/80">
+                    <span className="truncate font-semibold">TOTAL / MOYENNE</span>
+                    <span className="text-right tabular-nums text-emerald-200">
+                      {competitionSummary.totalHits}
+                      <span className="text-white/40"> / {competitionSummary.totalPicks}</span>
+                    </span>
+                    <span className="text-right tabular-nums">
+                      {competitionSummary.totalPicks}
+                    </span>
+                    <span className="text-right tabular-nums text-emerald-200">
+                      {competitionSummary.hitRate.toFixed(1)}%
+                    </span>
+                    <span className="text-right tabular-nums text-white/60">
+                      {competitionSummary.avgPicks.toFixed(1)}
+                    </span>
+                  </div>
+                  {competitionStats.map((row) => {
+                    const isDiscouraged = DISCOURAGED_COMPETITIONS.has(
+                      `${row.country}|||${row.name}`
+                    );
+                    return (
+                    <div
+                      key={`${row.country}-${row.name}`}
+                      className={`grid grid-cols-[1.4fr_90px_90px_90px_90px] items-center gap-3 px-3 py-2 ${
+                        isDiscouraged ? "text-rose-300" : ""
+                      }`}
+                    >
+                      <span className="truncate">
+                        {row.country} - {row.name}
+                      </span>
+                      <span className="text-right tabular-nums text-emerald-200">
+                        {row.hits}
+                        <span className="text-white/40"> / {row.total}</span>
+                      </span>
+                      <span className="text-right tabular-nums">{row.total}</span>
+                      <span className="text-right tabular-nums text-emerald-200">
+                        {row.hitRate.toFixed(1)}%
+                      </span>
+                      <span className="text-right tabular-nums text-white/60">
+                        {row.share.toFixed(1)}%
+                      </span>
+                    </div>
+                    );
+                  })}
+                </>
+              ) : (
+                <div className="px-3 py-3 text-sm text-white/50">Aucune donnée.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="text-xs text-white/60">Exporter CSV :</div>
+        <button
+          type="button"
+          onClick={() => downloadCsv("all")}
+          className="px-3 py-1 rounded-lg text-xs bg-white/10 text-white/70 hover:bg-white/20"
+        >
+          Tout
+        </button>
+        <button
+          type="button"
+          onClick={() => downloadCsv("hit")}
+          className="px-3 py-1 rounded-lg text-xs bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30"
+        >
+          Gagnés
+        </button>
+        <button
+          type="button"
+          onClick={() => downloadCsv("miss")}
+          className="px-3 py-1 rounded-lg text-xs bg-rose-500/20 text-rose-200 hover:bg-rose-500/30"
+        >
+          Perdus
+        </button>
       </div>
 
       {loading ? (
@@ -580,6 +1114,62 @@ export default function PicksHistoryPage() {
           subLabel={`(${BASE_BANKROLL}$ base • ${STAKE}$ / mise)`}
         />
       )}
+
+      <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-white/70">Liste complète des picks (filtrés)</div>
+          <button
+            type="button"
+            onClick={() => setShowPickList((prev) => !prev)}
+            className="px-3 py-1 rounded-lg text-xs bg-white/10 text-white/70 hover:bg-white/20"
+          >
+            {showPickList ? "Fermer" : "Afficher"}
+          </button>
+        </div>
+        {showPickList ? (
+          <div className="mt-3 max-h-[70vh] overflow-y-auto rounded-lg border border-white/10 bg-black/20">
+            <div className="grid grid-cols-[120px_1.4fr_1fr_80px_90px_70px] gap-3 px-3 py-2 text-[10px] uppercase tracking-wide text-white/40">
+              <span>Date</span>
+              <span>Match</span>
+              <span>Pick</span>
+              <span>Odds</span>
+              <span>Marché</span>
+              <span>Statut</span>
+            </div>
+            <div className="divide-y divide-white/10 text-[12px] text-white/70">
+              {displayItemsSorted.length ? (
+                displayItemsSorted.map((row) => (
+                  <div
+                    key={`pick-list-${row.id}`}
+                    className="grid grid-cols-[120px_1.4fr_1fr_80px_90px_70px] items-center gap-3 px-3 py-2"
+                  >
+                    <span className="text-white/60">{row.snapshot_date}</span>
+                    <span className="truncate">
+                      {row.home_name ?? "Home"} vs {row.away_name ?? "Away"}
+                    </span>
+                    <span className="truncate">{row.pick}</span>
+                    <span className="tabular-nums">{row.odd ?? "-"}</span>
+                    <span className="text-white/60">{row.market ?? "-"}</span>
+                    <span
+                      className={
+                        row.status === "hit"
+                          ? "text-emerald-300"
+                          : row.status === "miss"
+                            ? "text-rose-300"
+                            : "text-white/40"
+                      }
+                    >
+                      {row.status ?? "pending"}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="px-3 py-3 text-sm text-white/50">Aucune donnée.</div>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
 
       <div className="rounded-xl border border-white/10 bg-white/5 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
@@ -637,6 +1227,110 @@ export default function PicksHistoryPage() {
             Pas assez de picks pour générer un combiné dans la fourchette demandée.
           </div>
         )}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+          <div className="text-xs text-white/60">Historique combinés</div>
+          <div className="text-2xl font-semibold">
+            {combosHistoryStats.hits}
+            <span className="text-sm text-white/40 ml-2">/ {combosHistoryStats.total}</span>
+          </div>
+          <div className="mt-2 text-xs text-white/60">
+            Hits / Total • {combosHistoryStats.hitRate.toFixed(1)}%
+          </div>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+          <div className="text-xs text-white/60">ROI combinés</div>
+          <div
+            className={`text-2xl font-semibold ${
+              combosHistoryStats.roiPct >= 0 ? "text-emerald-200" : "text-rose-300"
+            }`}
+          >
+            {combosHistoryStats.roiPct.toFixed(1)}%
+          </div>
+          <div className="mt-2 text-xs text-white/60">
+            Base {BASE_BANKROLL}$ • Mise {STAKE}$
+          </div>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+          <div className="text-xs text-white/60">Cote moyenne (combinés)</div>
+          <div className="text-2xl font-semibold">
+            {combosHistoryStats.avgOdd.toFixed(2)}
+          </div>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+          <div className="text-xs text-white/60">Miss</div>
+          <div className="text-2xl font-semibold text-rose-300">
+            {combosHistoryStats.misses}
+          </div>
+        </div>
+      </div>
+
+      {combosHistoryStats.points.length ? (
+        <PicksChart
+          points={combosHistoryStats.points}
+          label="Évolution capital (Combinés)"
+          subLabel={`(${BASE_BANKROLL}$ base • ${STAKE}$ / mise)`}
+        />
+      ) : (
+        <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-white/70 text-sm">
+          Pas assez de combinés résolus pour la courbe.
+        </div>
+      )}
+
+      <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-white/70">Sélection combinés (historique)</div>
+        </div>
+        <div className="mt-3 max-h-[60vh] overflow-y-auto rounded-lg border border-white/10 bg-black/20">
+          <div className="grid grid-cols-[110px_1fr_90px_70px] gap-3 px-3 py-2 text-[10px] uppercase tracking-wide text-white/40">
+            <span>Date</span>
+            <span>Sélection</span>
+            <span>Cote</span>
+            <span>Statut</span>
+          </div>
+          <div className="divide-y divide-white/10 text-[12px] text-white/70">
+            {combosHistory.length ? (
+              combosHistory.map((combo, idx) => (
+                <div
+                  key={`combo-history-${combo.snapshotDate}-${idx}`}
+                  className="grid grid-cols-[110px_1fr_90px_70px] items-start gap-3 px-3 py-2"
+                >
+                  <span className="text-white/60">{combo.snapshotDate}</span>
+                  <div className="space-y-1">
+                    {combo.legs.map((leg) => (
+                      <div
+                        key={leg.id}
+                        className={`truncate ${
+                          leg.status === "miss" ? "text-rose-300" : "text-white/70"
+                        }`}
+                      >
+                        {(leg.competition_country ?? "N/A")}:{" "}
+                        {leg.home_name ?? "Home"} vs {leg.away_name ?? "Away"} • {leg.pick} •{" "}
+                        {leg.odd ?? "-"}
+                      </div>
+                    ))}
+                  </div>
+                  <span className="tabular-nums">{combo.totalOdd.toFixed(2)}</span>
+                  <span
+                    className={
+                      combo.status === "hit"
+                        ? "text-emerald-300"
+                        : combo.status === "miss"
+                          ? "text-rose-300"
+                          : "text-white/40"
+                    }
+                  >
+                    {combo.status ?? "pending"}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className="px-3 py-3 text-sm text-white/50">Aucune donnée.</div>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="rounded-xl border border-white/10 bg-white/5 p-4">

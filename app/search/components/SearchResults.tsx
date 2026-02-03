@@ -80,7 +80,6 @@ export function SearchResults({
         <details
           key={group.league}
           className="rounded-xl border border-white/10 bg-white/5 p-4"
-          open
         >
           <summary className="cursor-pointer select-none text-sm font-semibold text-white/80 uppercase tracking-wide">
             {group.league} • {group.teams.length} équipes

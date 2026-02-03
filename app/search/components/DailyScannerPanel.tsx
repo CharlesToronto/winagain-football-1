@@ -7,7 +7,6 @@ import { getLeagueFixturesBySeason } from "@/lib/queries/fixtures";
 import {
   AlgoSettings,
   type MarketLine,
-  DEFAULT_ALGO_SETTINGS,
   normalizeAlgoSettings,
   createRolling,
   addRolling,
@@ -36,12 +35,11 @@ const LINE_SETS: MarketLine[][] = [
   [1.5, "1X", "X2"],
   [2.5, "1X", "X2"],
 ];
-const VARIANT_COUNT = 30;
 const HIT_MIN = 0.8;
-const PICKS_MIN = 0.33;
 const MIN_TOTAL_PICKS = 25;
 const MIN_ODDS = 1.18;
 const MIN_ODDS_RETRY = 1.2;
+const V3_COVERAGE_MIN = 0.3;
 const CURRENT_SEASON = 2025;
 const SETTINGS_STORAGE_PREFIX = "winagain:algo-settings:team:";
 const SCAN_STORAGE_KEY = "winagain:daily-scanner:last";
@@ -71,6 +69,9 @@ type TeamEval = {
     hitRate: number;
     coverage: number;
     evaluated: number;
+    avgProbability: number;
+    valueScore: number;
+    roiScore: number;
   };
 };
 
@@ -101,6 +102,7 @@ type ScanResult = {
   odd: number | null;
   meetsOdds: boolean;
   meetsCriteria: boolean;
+  isDiscouraged: boolean;
 };
 
 type NextMatchInfo = {
@@ -182,15 +184,32 @@ function isSameLine(a: MarketLine, b: MarketLine) {
   return false;
 }
 
-function createLimiter(limit: number) {
+function createRateLimiter(maxConcurrent: number, minIntervalMs: number) {
   let active = 0;
+  let lastStart = 0;
+  let scheduled = false;
   const queue: Array<() => void> = [];
+
   const next = () => {
-    if (active >= limit || queue.length === 0) return;
+    if (active >= maxConcurrent || queue.length === 0) return;
+    const now = Date.now();
+    const wait = Math.max(0, minIntervalMs - (now - lastStart));
+    if (wait > 0) {
+      if (!scheduled) {
+        scheduled = true;
+        setTimeout(() => {
+          scheduled = false;
+          next();
+        }, wait);
+      }
+      return;
+    }
     active += 1;
+    lastStart = Date.now();
     const run = queue.shift();
     if (run) run();
   };
+
   return async function limitTask<T>(task: () => Promise<T>) {
     return new Promise<T>((resolve, reject) => {
       const run = () => {
@@ -208,7 +227,8 @@ function createLimiter(limit: number) {
   };
 }
 
-const oddsLimiter = createLimiter(4);
+const ODDS_MIN_INTERVAL_MS = 250; // ~240 req/min to stay under 300/min
+const oddsLimiter = createRateLimiter(1, ODDS_MIN_INTERVAL_MS);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function fetchFixtureOdds(
@@ -398,16 +418,14 @@ function computeUpcomingPick(
   };
 }
 
-function buildCandidateSettings(count: number) {
+function buildAllSettings(lineSets: MarketLine[][], weightModes: Array<"soft" | "medium" | "hard">) {
   const combos: AlgoSettings[] = [];
-  const weightModes: Array<"soft" | "medium" | "hard"> = ["soft", "medium", "hard"];
-
   for (const windowSize of WINDOWS) {
     for (const bucketSize of BUCKETS) {
       for (const threshold of THRESHOLDS) {
         for (const minMatches of MIN_MATCHES) {
           for (const minLeagueMatches of MIN_LEAGUE_MATCHES) {
-            for (const lines of LINE_SETS) {
+            for (const lines of lineSets) {
               for (const mode of weightModes) {
                 const buckets = Math.max(1, Math.ceil(windowSize / bucketSize));
                 const weights = Array.from({ length: buckets }, (_, idx) => {
@@ -434,12 +452,7 @@ function buildCandidateSettings(count: number) {
       }
     }
   }
-
-  for (let i = combos.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [combos[i], combos[j]] = [combos[j], combos[i]];
-  }
-  return combos.slice(0, count);
+  return combos;
 }
 
 function loadLocalTeamSettings(teamId: number) {
@@ -477,12 +490,31 @@ export default function DailyScannerPanel() {
   const [lastScanInfo, setLastScanInfo] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [dayTab, setDayTab] = useState<"today" | "tomorrow">("today");
+  const [hideDiscouraged, setHideDiscouraged] = useState(true);
   const cacheRef = useRef<Map<string, TeamEval>>(new Map());
+
+  const discouragedCompetitionKeys = useMemo(
+    () =>
+      new Set([
+        "Israel|||Liga Leumit",
+        "Scotland|||Football League - Highland League",
+        "Scotland|||League One",
+        "Belgium|||Challenger Pro League",
+        "Hungary|||NB II",
+        "Italy|||Serie C - Girone A",
+      ]),
+    []
+  );
 
   const timeZone = useMemo(
     () => Intl.DateTimeFormat().resolvedOptions().timeZone ?? "local",
     []
   );
+
+  const isDiscouragedCompetition = (country: string | null, name: string | null) => {
+    if (!country || !name) return false;
+    return discouragedCompetitionKeys.has(`${country}|||${name}`);
+  };
 
   const toDateKey = (value: Date) =>
     new Intl.DateTimeFormat("en-CA", {
@@ -516,9 +548,11 @@ export default function DailyScannerPanel() {
       if (!row.dateUtc) return false;
       const date = new Date(row.dateUtc);
       if (!Number.isFinite(date.getTime())) return false;
-      return toDateKey(date) === key;
+      if (toDateKey(date) !== key) return false;
+      if (hideDiscouraged && row.isDiscouraged) return false;
+      return true;
     });
-  }, [results, dayTab, todayKey, tomorrowKey]);
+  }, [results, dayTab, todayKey, tomorrowKey, hideDiscouraged]);
 
   const summaryStats = useMemo(() => {
     const count = filteredResults.length;
@@ -533,7 +567,10 @@ export default function DailyScannerPanel() {
     return { count, avgHit, avgOdd };
   }, [filteredResults]);
 
-  const candidatePool = useMemo(() => buildCandidateSettings(VARIANT_COUNT), []);
+  const phase1Candidates = useMemo(
+    () => buildAllSettings(LINE_SETS, ["soft"]),
+    []
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -585,6 +622,11 @@ export default function DailyScannerPanel() {
     const picks = filtered.length;
     const hitRate = picks ? hits / picks : 0;
     const coverage = allPicks.length ? picks / allPicks.length : 0;
+    const avgProbability = picks
+      ? filtered.reduce((sum, pick) => sum + (pick.probability || 0), 0) / picks
+      : 0;
+    const valueScore = avgProbability - baseSettings.threshold;
+    const roiScore = hitRate * avgProbability;
     const evalResult: TeamEval = {
       settings: baseSettings,
       stats: {
@@ -593,51 +635,86 @@ export default function DailyScannerPanel() {
         hitRate,
         coverage,
         evaluated: allPicks.length,
+        avgProbability,
+        valueScore,
+        roiScore,
       },
     };
     cacheRef.current.set(cacheKey, evalResult);
     return evalResult;
   };
 
-  const findBestSettings = (
+  const findBestSettingsV3 = (
     fixtures: BacktestFixture[],
-    teamId: number,
-    baseSettings: AlgoSettings
+    teamId: number
   ): { evalResult: TeamEval; meetsCriteria: boolean } | null => {
-    const candidates = [
-      baseSettings,
-      ...candidatePool.filter((item) => item !== baseSettings),
-    ];
-    const unique = new Map<string, AlgoSettings>();
-    candidates.forEach((settings) => {
-      unique.set(JSON.stringify(settings), settings);
-    });
-    const list = Array.from(unique.values());
+    const phase2WeightModes: Array<"soft" | "medium" | "hard"> = ["soft", "medium", "hard"];
 
-    const eligible: TeamEval[] = [];
-    const evaluated: TeamEval[] = [];
-    list.forEach((settings) => {
+    const phase1Computed: TeamEval[] = [];
+    phase1Candidates.forEach((settings) => {
       const evalResult = computeTeamEval(fixtures, teamId, settings);
       if (!evalResult) return;
-      evaluated.push(evalResult);
-      if (
-        evalResult.stats.hitRate >= HIT_MIN &&
-        evalResult.stats.coverage >= PICKS_MIN &&
-        evalResult.stats.picks >= MIN_TOTAL_PICKS
-      ) {
-        eligible.push(evalResult);
-      }
+      phase1Computed.push(evalResult);
     });
+    const phase1Filtered = phase1Computed.filter(
+      (row) =>
+        row.stats.hitRate >= HIT_MIN &&
+        row.stats.coverage >= V3_COVERAGE_MIN &&
+        row.stats.picks >= MIN_TOTAL_PICKS
+    );
     const rank = (a: TeamEval, b: TeamEval) => {
-      if (b.stats.picks !== a.stats.picks) return b.stats.picks - a.stats.picks;
+      if (b.stats.roiScore !== a.stats.roiScore) return b.stats.roiScore - a.stats.roiScore;
       if (b.stats.hitRate !== a.stats.hitRate) return b.stats.hitRate - a.stats.hitRate;
+      if (b.stats.valueScore !== a.stats.valueScore) return b.stats.valueScore - a.stats.valueScore;
+      if (b.stats.picks !== a.stats.picks) return b.stats.picks - a.stats.picks;
       return b.stats.coverage - a.stats.coverage;
     };
-    if (eligible.length) {
-      return { evalResult: eligible.sort(rank)[0], meetsCriteria: true };
+
+    const topPhase1 = phase1Filtered.slice().sort(rank).slice(0, 50);
+    const phase2Candidates: AlgoSettings[] = [];
+    topPhase1.forEach((row) => {
+      const buckets = Math.max(1, Math.ceil(row.settings.windowSize / row.settings.bucketSize));
+      phase2WeightModes.forEach((mode) => {
+        const minValue = mode === "soft" ? 0.7 : mode === "medium" ? 0.5 : 0.3;
+        const step = buckets <= 1 ? 0 : (1 - minValue) / (buckets - 1);
+        const weights = Array.from({ length: buckets }, (_, idx) => {
+          const value = 1 - idx * step;
+          return Math.round(value * 100) / 100;
+        });
+        phase2Candidates.push(
+          normalizeAlgoSettings({
+            ...row.settings,
+            weights,
+          })
+        );
+      });
+    });
+    const unique = new Map<string, AlgoSettings>();
+    phase2Candidates.forEach((settings) => unique.set(JSON.stringify(settings), settings));
+    const finalCandidates = Array.from(unique.values());
+    const phase2Computed: TeamEval[] = [];
+    finalCandidates.forEach((settings) => {
+      const evalResult = computeTeamEval(fixtures, teamId, settings);
+      if (!evalResult) return;
+      phase2Computed.push(evalResult);
+    });
+    const phase2Filtered = phase2Computed.filter(
+      (row) =>
+        row.stats.hitRate >= HIT_MIN &&
+        row.stats.coverage >= V3_COVERAGE_MIN &&
+        row.stats.picks >= MIN_TOTAL_PICKS
+    );
+
+    if (phase2Filtered.length) {
+      return { evalResult: phase2Filtered.slice().sort(rank)[0], meetsCriteria: true };
     }
-    if (!evaluated.length) return null;
-    return { evalResult: evaluated.sort(rank)[0], meetsCriteria: false };
+    if (phase2Computed.length) {
+      return { evalResult: phase2Computed.slice().sort(rank)[0], meetsCriteria: false };
+    }
+    if (phase1Computed.length) {
+      return { evalResult: phase1Computed.slice().sort(rank)[0], meetsCriteria: false };
+    }
+    return null;
   };
 
   const runScan = async () => {
@@ -760,7 +837,12 @@ export default function DailyScannerPanel() {
         }
       }
 
-      const totalEvaluations = fixtures.reduce((sum, fixture) => {
+      const allowedCompetitionIds = new Set<number>(Array.from(competitionNameMap.keys()));
+      const visibleFixtures = fixtures.filter((fixture) =>
+        allowedCompetitionIds.has(Number(fixture.competition_id ?? 0))
+      );
+
+      const totalEvaluations = visibleFixtures.reduce((sum, fixture) => {
         const homeValid = Number.isFinite(fixture.home?.id) ? 1 : 0;
         const awayValid = Number.isFinite(fixture.away?.id) ? 1 : 0;
         return sum + homeValid + awayValid;
@@ -804,7 +886,7 @@ export default function DailyScannerPanel() {
       const autoSavedTeams = new Set<number>();
       const output: ScanResult[] = [];
 
-      fixtures.forEach((fixture) => {
+      visibleFixtures.forEach((fixture) => {
         const leagueId = Number(fixture.competition_id ?? 0);
         const leagueFixtures = leagueFixturesMap.get(leagueId) ?? [];
         if (!leagueFixtures.length) return;
@@ -822,14 +904,12 @@ export default function DailyScannerPanel() {
         ] as const).forEach((entry) => {
           const teamId = Number(entry.team?.id ?? 0);
           if (!Number.isFinite(teamId)) return;
-          const baseSettings = teamSettingsMap.get(teamId) ?? DEFAULT_ALGO_SETTINGS;
-
           const cacheKey = `${leagueId}:${teamId}`;
           let cached = bestSettingsCache.get(cacheKey) ?? null;
           let evalResult = cached?.evalResult ?? null;
           let meetsCriteria = cached?.meetsCriteria ?? true;
           if (!bestSettingsCache.has(cacheKey)) {
-            const best = findBestSettings(leagueFixtures, teamId, baseSettings);
+            const best = findBestSettingsV3(leagueFixtures, teamId);
             evalResult = best?.evalResult ?? null;
             meetsCriteria = best?.meetsCriteria ?? true;
             bestSettingsCache.set(cacheKey, best);
@@ -891,6 +971,7 @@ export default function DailyScannerPanel() {
             odd: null,
             meetsOdds: false,
             meetsCriteria,
+            isDiscouraged: false,
           });
         });
       });
@@ -923,7 +1004,7 @@ export default function DailyScannerPanel() {
 
           const baseCriteria =
             row.hitRate >= HIT_MIN &&
-            row.coverage >= PICKS_MIN &&
+            row.coverage >= V3_COVERAGE_MIN &&
             row.picks >= MIN_TOTAL_PICKS;
 
           if (
@@ -958,6 +1039,9 @@ export default function DailyScannerPanel() {
           }
 
           const meetsOdds = oddValue == null ? true : oddValue >= MIN_ODDS;
+          const isDiscouraged =
+            isDiscouragedCompetition(row.competitionCountry, row.competitionName) ||
+            pick.trim() === "12";
           return {
             ...row,
             pick,
@@ -965,6 +1049,7 @@ export default function DailyScannerPanel() {
             odd: oddValue,
             meetsOdds,
             meetsCriteria: row.meetsCriteria,
+            isDiscouraged,
           };
         })
       );
@@ -976,7 +1061,7 @@ export default function DailyScannerPanel() {
             SCAN_STORAGE_KEY,
             JSON.stringify({
               results: enrichedOutput,
-              lastScanInfo: `${fixtures.length} match(s) analysé(s) • ${filteredOutput.length} match(s) retenu(s) • ${totalEvaluations} évaluations`,
+              lastScanInfo: `${visibleFixtures.length} match(s) analysé(s) • ${filteredOutput.length} match(s) retenu(s) • ${totalEvaluations} évaluations`,
             })
           );
         } catch {
@@ -984,16 +1069,16 @@ export default function DailyScannerPanel() {
         }
       }
       setLastScanInfo(
-        `${fixtures.length} match(s) analysé(s) • ${filteredOutput.length} match(s) retenu(s) • ${totalEvaluations} évaluations`
+        `${visibleFixtures.length} match(s) analysé(s) • ${filteredOutput.length} match(s) retenu(s) • ${totalEvaluations} évaluations`
       );
       void logAlgoEvent({
         eventType: "scan_daily",
         payload: {
-          matchCount: fixtures.length,
+          matchCount: visibleFixtures.length,
           retained: filteredOutput.length,
           totalEvaluations,
           timezone: timeZone,
-          criteria: { hitMin: HIT_MIN, picksMin: PICKS_MIN },
+          criteria: { hitMin: HIT_MIN, picksMin: V3_COVERAGE_MIN },
           autoSavedTeams: autoSavedTeams.size,
           results: filteredOutput.map((row) => ({
             fixtureId: row.fixtureId,
@@ -1067,6 +1152,15 @@ export default function DailyScannerPanel() {
             Demain
           </button>
         </div>
+        <label className="flex items-center gap-2 text-xs text-white/70 self-center md:self-auto">
+          <input
+            type="checkbox"
+            checked={hideDiscouraged}
+            onChange={() => setHideDiscouraged((prev) => !prev)}
+            className="accent-red-500"
+          />
+          <span>Masquer les choix déconseillés</span>
+        </label>
         <button
           type="button"
           onClick={runScan}
@@ -1145,7 +1239,6 @@ export default function DailyScannerPanel() {
               <details
                 key={group.id}
                 className="group -mx-4 px-2 rounded-xl bg-transparent"
-                open
               >
                 <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none rounded-xl border border-white/10 group-open:border-transparent text-[11px]">
                   {group.logo ? (
@@ -1185,9 +1278,20 @@ export default function DailyScannerPanel() {
                       ? Math.min(row.picks, Math.max(0, Math.round(row.hitRate * row.picks)))
                       : 0;
                     const hitPercent = row.picks ? (hits / row.picks) * 100 : 0;
+                    const isBlacklisted = isDiscouragedCompetition(
+                      row.competitionCountry,
+                      row.competitionName
+                    );
+                    const isMarket12 = row.pick.trim() === "12";
+                    const discouragedReason = [
+                      isBlacklisted ? "compétition blacklistée" : null,
+                      isMarket12 ? "marché 12" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" • ");
                     const baseCriteria =
                       row.hitRate >= HIT_MIN &&
-                      row.coverage >= PICKS_MIN &&
+                      row.coverage >= V3_COVERAGE_MIN &&
                       row.picks >= MIN_TOTAL_PICKS;
                     const oddsOk =
                       row.meetsOdds ?? (row.odd != null ? row.odd >= MIN_ODDS : true);
@@ -1247,6 +1351,26 @@ export default function DailyScannerPanel() {
                           >
                             Pick {row.pick}
                           </span>
+                          {row.isDiscouraged ? (
+                            <span
+                              className="flex items-center gap-1 rounded-md border border-red-400/60 bg-red-500/20 px-2 py-0.5 text-red-200"
+                              title={`Déconseillé : ${discouragedReason || "raison inconnue"}`}
+                            >
+                              <svg
+                                viewBox="0 0 24 24"
+                                width={14}
+                                height={14}
+                                aria-hidden
+                              >
+                                <path
+                                  d="M6 6l12 12M18 6L6 18"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                />
+                              </svg>
+                            </span>
+                          ) : null}
                           <span className="text-pink-200">
                             @{row.odd != null ? row.odd.toFixed(2) : "-"}
                           </span>
@@ -1264,7 +1388,7 @@ export default function DailyScannerPanel() {
       ) : null}
 
       <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-white/70 blur-[2px] transition hover:blur-none">
-        Critères : Hit ≥ 80% • Coverage ≥ 33% • Minimum 25 picks (sur 2 saisons) • Cote ≥ 1.18 •
+        Critères : Hit ≥ 80% • Coverage ≥ 30% • Minimum 25 picks (sur 2 saisons) • Cote ≥ 1.18 •
         Réglages par équipe + variantes.
       </div>
     </div>

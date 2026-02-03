@@ -228,14 +228,8 @@ export default async function RencontrePage({
     const compId = Number.isFinite(fixture.competition_id)
       ? Number(fixture.competition_id)
       : 0;
-    const competition =
-      competitionMap.get(compId) ??
-      ({
-        id: compId,
-        name: compId ? `Compétition ${compId}` : "Compétition",
-        country: null,
-        logo: null,
-      } as CompetitionInfo);
+    const competition = competitionMap.get(compId);
+    if (!competition) return;
 
     const groups = dayGroups.get(key)!;
     const group = groups.get(compId) ?? { competition, fixtures: [] };
@@ -336,7 +330,7 @@ export default async function RencontrePage({
                         key={`competition-${section.key}-${group.competition.id}-${activeDay}`}
                         className="group -mx-4 px-2 rounded-xl bg-transparent"
                       >
-                        <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none rounded-xl border-2 border-white/20 bg-gradient-to-br from-white/10 via-white/5 to-white/10 backdrop-blur-sm group-open:border-transparent group-open:bg-transparent text-[11px]">
+                        <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none rounded-xl border border-white/20 bg-gradient-to-br from-white/10 via-white/5 to-white/10 backdrop-blur-sm group-open:border-transparent group-open:bg-transparent text-[11px]">
                           {group.competition.logo ? (
                             <img
                               src={group.competition.logo}
