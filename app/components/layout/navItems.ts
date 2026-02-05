@@ -1,5 +1,4 @@
 import {
-  IconHome,
   IconTrophy,
   IconCalendar,
   IconSearch,
@@ -11,11 +10,18 @@ import {
 } from "@/app/components/icons";
 
 export const navItems = [
-  { name: "Home", href: "/home", icon: IconHome },
   { name: "Leagues", href: "/leagues", icon: IconTrophy },
   { name: "Rencontre", href: "/rencontre", icon: IconCalendar },
   { name: "Search", href: "/search", icon: IconSearch },
-  { name: "Historique Algo", href: "/picks", icon: IconChart },
+  {
+    name: "Historique Algo",
+    href: "/picks",
+    icon: IconChart,
+    children: [
+      { name: "Matchs simples", href: "/picks", icon: IconChart },
+      { name: "Combinés", href: "/combos", icon: IconChart },
+    ],
+  },
   { name: "Chat", href: "/chat", icon: IconMessage },
   {
     name: "Users",

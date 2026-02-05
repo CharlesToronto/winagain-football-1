@@ -4,6 +4,8 @@ node_modules
 # next
 .next
 out
+.next-build
+.next-dev
 
 # env
 .env
@@ -19,3 +21,6 @@ supabase/.temp
 
 # OS
 .DS_Store
+
+# typescript
+*.tsbuildinfo

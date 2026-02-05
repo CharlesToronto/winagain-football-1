@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import GoalsTrendCard, { getGoalsForMode, type Mode } from "./GoalsTrendCard";
-import AiPromptButton from "./AiPromptButton";
 import ConfidenceBadgeTrigger from "./ConfidenceBadgeTrigger";
 
 type Fixture = any;
@@ -280,23 +279,13 @@ export default function GoalsTotalTrendSection({
       >
         <div className="order-2 md:order-1 snap-start shrink-0 w-full md:w-auto md:col-span-1">
           <div className="space-y-2">
-            {onAiPrompt ? (
-              <div className="flex items-center justify-between">
-                <AiPromptButton
-                  onClick={() =>
-                    onAiPrompt(
-                      `Match suivant sous ${thresholdLabel}`,
-                      `Total buts | Seuil ${thresholdLabel}`
-                    )
-                  }
-                />
-                <ConfidenceBadgeTrigger
-                  activeCount={badgeActiveCount}
-                  totalCount={badgeTotalCount}
-                  visible={matchBelowIndicator}
-                />
-              </div>
-            ) : null}
+            <div className="flex items-center justify-between">
+              <ConfidenceBadgeTrigger
+                activeCount={badgeActiveCount}
+                totalCount={badgeTotalCount}
+                visible={matchBelowIndicator}
+              />
+            </div>
             <div className={cardBorderClass}>
               <NextMatchBelowTotalCard entries={entries} threshold={threshold} />
             </div>
@@ -304,32 +293,22 @@ export default function GoalsTotalTrendSection({
         </div>
         <div className="order-1 md:order-2 snap-start shrink-0 w-full md:w-auto md:col-span-2">
           <div className="space-y-2">
-            {onAiPrompt ? (
-              <div className="flex items-center justify-between">
-                <AiPromptButton
-                  onClick={() =>
-                    onAiPrompt(
-                      "Tendance buts (total par match)",
-                      `Total buts | Seuil ${thresholdLabel}`
-                    )
-                  }
-                />
-                {teamIndicatorActive || opponentIndicatorActive ? (
-                  <div className="flex items-center gap-1">
-                    <ConfidenceBadgeTrigger
-                      activeCount={badgeActiveCount}
-                      totalCount={badgeTotalCount}
-                      visible={teamIndicatorActive}
-                    />
-                    <ConfidenceBadgeTrigger
-                      activeCount={badgeActiveCount}
-                      totalCount={badgeTotalCount}
-                      visible={opponentIndicatorActive}
-                    />
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
+            <div className="flex items-center justify-between">
+              {teamIndicatorActive || opponentIndicatorActive ? (
+                <div className="flex items-center gap-1">
+                  <ConfidenceBadgeTrigger
+                    activeCount={badgeActiveCount}
+                    totalCount={badgeTotalCount}
+                    visible={teamIndicatorActive}
+                  />
+                  <ConfidenceBadgeTrigger
+                    activeCount={badgeActiveCount}
+                    totalCount={badgeTotalCount}
+                    visible={opponentIndicatorActive}
+                  />
+                </div>
+              ) : null}
+            </div>
             <div className={cardBorderClass}>
               <GoalsTrendCard
                 fixtures={fixtures ?? []}

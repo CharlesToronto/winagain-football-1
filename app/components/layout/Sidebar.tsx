@@ -9,7 +9,7 @@ import { CIBLE_ACTIVE_EVENT, CIBLE_ACTIVE_KEY } from "@/lib/cible";
 export default function Sidebar() {
   const pathname = usePathname();
   const [cibleActive, setCibleActive] = useState(false);
-  const [usersOpen, setUsersOpen] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -38,8 +38,15 @@ export default function Sidebar() {
   }, []);
 
   useEffect(() => {
-    if (pathname.startsWith("/users") || pathname.startsWith("/admin-data")) {
-      setUsersOpen(true);
+    // Keep the active group open so the user always sees where they are.
+    const nextOpen: Record<string, boolean> = {};
+    navItems.forEach((item) => {
+      if (!item.children?.length) return;
+      const childActive = item.children.some((child) => pathname.startsWith(child.href));
+      if (childActive) nextOpen[item.href] = true;
+    });
+    if (Object.keys(nextOpen).length) {
+      setOpenGroups((prev) => ({ ...prev, ...nextOpen }));
     }
   }, [pathname]);
 
@@ -60,24 +67,25 @@ export default function Sidebar() {
       <nav className="flex flex-col gap-1.5">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const isUsers = item.href === "/users" && item.children?.length;
-          const childActive = item.children?.some((child) =>
-            pathname.startsWith(child.href)
-          );
+          const isGroup = Boolean(item.children?.length);
+          const childActive = item.children?.some((child) => pathname.startsWith(child.href));
           const active = pathname.startsWith(item.href) || Boolean(childActive);
 
-          if (isUsers) {
+          if (isGroup) {
+            const groupOpen = Boolean(openGroups[item.href]);
             return (
               <div key={item.href} className="space-y-1">
                 <button
                   type="button"
-                  onClick={() => setUsersOpen((prev) => !prev)}
+                  onClick={() =>
+                    setOpenGroups((prev) => ({ ...prev, [item.href]: !prev[item.href] }))
+                  }
                   className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm w-full ${
                     active
                       ? "bg-white/20 text-white"
                       : "text-white/80 hover:bg-white/10"
                   }`}
-                  aria-expanded={usersOpen}
+                  aria-expanded={groupOpen}
                 >
                   <Icon size={18} />
                   <span className="flex-1 text-left">{item.name}</span>
@@ -85,7 +93,7 @@ export default function Sidebar() {
                     viewBox="0 0 24 24"
                     width={16}
                     height={16}
-                    className={`transition-transform ${usersOpen ? "rotate-180" : ""}`}
+                    className={`transition-transform ${groupOpen ? "rotate-180" : ""}`}
                     aria-hidden
                   >
                     <path
@@ -98,7 +106,7 @@ export default function Sidebar() {
                     />
                   </svg>
                 </button>
-                {usersOpen ? (
+                {groupOpen ? (
                   <div className="ml-8 flex flex-col gap-1">
                     {item.children?.map((child) => {
                       const childIsActive = pathname.startsWith(child.href);

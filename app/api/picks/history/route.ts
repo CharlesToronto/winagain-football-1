@@ -94,7 +94,10 @@ export async function GET(request: Request) {
       competition_country: competitionCountryMap.get(Number(row?.league_id)) ?? null,
     }));
 
-    return NextResponse.json({ items: enriched });
+    const res = NextResponse.json({ items: enriched });
+    // Explicitly prevent caching. We rely on live DB state (statuses change after resolve).
+    res.headers.set("Cache-Control", "no-store, max-age=0");
+    return res;
   } catch (err: any) {
     return NextResponse.json(
       { error: true, details: err?.message ?? "History error" },

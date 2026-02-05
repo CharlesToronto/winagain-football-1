@@ -7,7 +7,6 @@ import GoalsScoredTrendCard, {
   type Mode,
   type SeriesEntry,
 } from "./GoalsScoredTrendCard";
-import AiPromptButton from "./AiPromptButton";
 import ConfidenceBadgeTrigger from "./ConfidenceBadgeTrigger";
 
 type Fixture = any;
@@ -248,23 +247,13 @@ export default function GoalsScoredTrendSection({
       >
         <div className="snap-start shrink-0 w-full md:w-auto md:col-span-2">
           <div className="space-y-2">
-            {onAiPrompt ? (
-              <div className="flex items-center justify-between">
-                <AiPromptButton
-                  onClick={() =>
-                    onAiPrompt(
-                      "Tendance buts (Marqués)",
-                      `Buts marqués | Seuil ${thresholdLabel} | Lieu ${locationLabel}`
-                    )
-                  }
-                />
-                <ConfidenceBadgeTrigger
-                  activeCount={badgeActiveCount}
-                  totalCount={badgeTotalCount}
-                  visible={trendIndicatorActive}
-                />
-              </div>
-            ) : null}
+            <div className="flex items-center justify-between">
+              <ConfidenceBadgeTrigger
+                activeCount={badgeActiveCount}
+                totalCount={badgeTotalCount}
+                visible={trendIndicatorActive}
+              />
+            </div>
             <div className={cardBorderClass}>
               <GoalsScoredTrendCard
                 fixtures={fixtures ?? []}
@@ -283,23 +272,13 @@ export default function GoalsScoredTrendSection({
         </div>
         <div className="snap-start shrink-0 w-full md:w-auto md:col-span-1">
           <div className="space-y-2">
-            {onAiPrompt ? (
-              <div className="flex items-center justify-between">
-                <AiPromptButton
-                  onClick={() =>
-                    onAiPrompt(
-                      `Match suivant sous ${thresholdLabel}`,
-                      `Buts Marqués | Seuil ${thresholdLabel} | Lieu ${locationLabel}`
-                    )
-                  }
-                />
-                <ConfidenceBadgeTrigger
-                  activeCount={badgeActiveCount}
-                  totalCount={badgeTotalCount}
-                  visible={matchBelowIndicator}
-                />
-              </div>
-            ) : null}
+            <div className="flex items-center justify-between">
+              <ConfidenceBadgeTrigger
+                activeCount={badgeActiveCount}
+                totalCount={badgeTotalCount}
+                visible={matchBelowIndicator}
+              />
+            </div>
             <div className={cardBorderClass}>
               <NextMatchBelowCard entries={entries} threshold={threshold} teamName={teamName} />
             </div>

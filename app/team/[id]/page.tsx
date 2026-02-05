@@ -10,8 +10,7 @@ import ProbabilitiesView from "./components/probabilities/ProbabilitiesView";
 import ConfidenceView from "./components/confidence/ConfidenceView";
 import LeagueStatsView from "./components/league/LeagueStatsView";
 import BacktestView from "./components/backtest/BacktestView";
-import TeamAiAnalysis from "./components/TeamAiAnalysis";
-import OddsConverter from "@/app/home/components/OddsConverter";
+import OddsConverter from "@/app/components/tools/OddsConverter";
 import StandingsList from "@/app/league/[id]/StandingsList";
 import { CibleProvider } from "@/app/components/cible/CibleContext";
 import computeFT from "@/lib/analysisEngine/computeFT";
@@ -1467,20 +1466,6 @@ function DashboardView({
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-      <div className="md:col-span-2">
-        <TeamAiAnalysis
-          team={team}
-          league={league}
-          nextMatch={nextMatch}
-          fixtures={fixtures}
-          opponentFixtures={opponentFixtures}
-          filter={filter}
-          range={range}
-          nextOpponentName={nextOpponentName}
-          nextOpponentId={nextOpponentId}
-        />
-      </div>
 
       <div className="hidden md:grid md:col-span-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-6">
         <div className="flex flex-col gap-6">
