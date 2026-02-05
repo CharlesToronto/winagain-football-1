@@ -28,6 +28,14 @@ const baseConfig = {
 };
 
 export default function nextConfig(phase) {
+  // Vercel's build/runtime expects the default `.next` directory.
+  // A custom distDir breaks deployments with missing manifests (e.g. routes-manifest.json).
+  const isVercel =
+    process.env.VERCEL === "1" ||
+    process.env.VERCEL === "true" ||
+    Boolean(process.env.VERCEL_ENV);
+  if (isVercel) return baseConfig;
+
   // Prevent "next build/start" from corrupting a running "next dev" by separating dist dirs.
   // Keep dev on the default `.next` (dev server assumes this for static assets).
   if (phase === PHASE_PRODUCTION_BUILD || phase === PHASE_PRODUCTION_SERVER) {

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+export const dynamic = "force-dynamic";
+
 /**
  * Compute EA Stats for all teams:
  * - Form last 5
@@ -26,7 +28,9 @@ export async function GET() {
     // Load all fixtures
     const { data: fixtures, error: fixturesErr } = await supabase
       .from("fixtures")
-      .select("id, home_id, away_id, status, home_goals, away_goals, date");
+      .select(
+        "id,home_team_id,away_team_id,status_short,goals_home,goals_away,date_utc"
+      );
 
     if (fixturesErr) {
       console.error("Fixtures error", fixturesErr);
@@ -37,23 +41,27 @@ export async function GET() {
 
     // Group fixtures by team
     for (const fx of fixtures ?? []) {
-      if (!fixturesByTeam[fx.home_id]) fixturesByTeam[fx.home_id] = [];
-      if (!fixturesByTeam[fx.away_id]) fixturesByTeam[fx.away_id] = [];
+      const homeId = Number((fx as any).home_team_id);
+      const awayId = Number((fx as any).away_team_id);
+      if (!Number.isFinite(homeId) || !Number.isFinite(awayId)) continue;
 
-      fixturesByTeam[fx.home_id].push({
+      if (!fixturesByTeam[homeId]) fixturesByTeam[homeId] = [];
+      if (!fixturesByTeam[awayId]) fixturesByTeam[awayId] = [];
+
+      fixturesByTeam[homeId].push({
         isHome: true,
-        goalsFor: fx.home_goals,
-        goalsAgainst: fx.away_goals,
-        status: fx.status,
-        date: fx.date,
+        goalsFor: (fx as any).goals_home,
+        goalsAgainst: (fx as any).goals_away,
+        status: (fx as any).status_short,
+        date: (fx as any).date_utc,
       });
 
-      fixturesByTeam[fx.away_id].push({
+      fixturesByTeam[awayId].push({
         isHome: false,
-        goalsFor: fx.away_goals,
-        goalsAgainst: fx.home_goals,
-        status: fx.status,
-        date: fx.date,
+        goalsFor: (fx as any).goals_away,
+        goalsAgainst: (fx as any).goals_home,
+        status: (fx as any).status_short,
+        date: (fx as any).date_utc,
       });
     }
 

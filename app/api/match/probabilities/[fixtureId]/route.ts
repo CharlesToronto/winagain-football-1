@@ -36,8 +36,11 @@ export async function GET(
       return NextResponse.json({ error: "Fixture not found" }, { status: 404 });
     }
 
-    const homeId = fixture.home_id;
-    const awayId = fixture.away_id;
+    const homeId = Number((fixture as any).home_team_id);
+    const awayId = Number((fixture as any).away_team_id);
+    if (!Number.isFinite(homeId) || !Number.isFinite(awayId)) {
+      return NextResponse.json({ error: "Fixture missing teams" }, { status: 500 });
+    }
 
     // Load EA team stats
     const { data: homeStats, error: hErr } = await supabase

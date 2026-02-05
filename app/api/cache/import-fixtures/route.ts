@@ -8,18 +8,16 @@ type NormalizedFixture = {
   id: number;
   competition_id: number;
   season: number | string | null;
-  date: string | null;
-  timestamp: number | null;
-  status: string;
-  round: string;
-  home_id: number | null;
-  home_name: string | null;
-  home_logo: string | null;
-  away_id: number | null;
-  away_name: string | null;
-  away_logo: string | null;
+  date_utc: string | null;
+  status_short: string | null;
+  status_long: string | null;
+  round: string | null;
+  home_team_id: number | null;
+  away_team_id: number | null;
   goals_home: number | null;
   goals_away: number | null;
+  goals_home_ht: number | null;
+  goals_away_ht: number | null;
 };
 
 function chunkArray<T>(items: T[], size: number): T[][] {
@@ -60,23 +58,22 @@ export async function GET() {
           const league = f.league ?? {};
           const teams = f.teams ?? {};
           const goals = f.goals ?? {};
+          const score = f.score ?? {};
 
           const normalized: NormalizedFixture = {
             id: fixture.id,
             competition_id: Number(competition.id),
             season: league.season ?? season,
-            date: fixture.date ?? null,
-            timestamp: fixture.timestamp ?? null,
-            status: fixture.status?.short ?? "",
-            round: league.round ?? "",
-            home_id: teams.home?.id ?? null,
-            home_name: teams.home?.name ?? null,
-            home_logo: teams.home?.logo ?? null,
-            away_id: teams.away?.id ?? null,
-            away_name: teams.away?.name ?? null,
-            away_logo: teams.away?.logo ?? null,
+            date_utc: fixture.date ?? null,
+            status_short: fixture.status?.short ?? null,
+            status_long: fixture.status?.long ?? null,
+            round: league.round ?? null,
+            home_team_id: teams.home?.id ?? null,
+            away_team_id: teams.away?.id ?? null,
             goals_home: goals.home ?? null,
-            goals_away: goals.away ?? null
+            goals_away: goals.away ?? null,
+            goals_home_ht: score?.halftime?.home ?? null,
+            goals_away_ht: score?.halftime?.away ?? null,
           };
 
           if (normalized.id) {
@@ -88,8 +85,8 @@ export async function GET() {
       if (allFixtures.length === 0) continue;
 
       const sorted = allFixtures.sort((a, b) => {
-        const aTime = a.timestamp ?? new Date(a.date ?? 0).getTime();
-        const bTime = b.timestamp ?? new Date(b.date ?? 0).getTime();
+        const aTime = a.date_utc ? new Date(a.date_utc).getTime() : 0;
+        const bTime = b.date_utc ? new Date(b.date_utc).getTime() : 0;
         return bTime - aTime;
       });
 
@@ -97,8 +94,8 @@ export async function GET() {
       const teamCounts = new Map<number, number>();
 
       for (const fx of sorted) {
-        const homeId = fx.home_id ?? undefined;
-        const awayId = fx.away_id ?? undefined;
+        const homeId = fx.home_team_id ?? undefined;
+        const awayId = fx.away_team_id ?? undefined;
         const homeCount = homeId ? teamCounts.get(homeId) || 0 : 0;
         const awayCount = awayId ? teamCounts.get(awayId) || 0 : 0;
 
