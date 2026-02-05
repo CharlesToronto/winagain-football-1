@@ -950,7 +950,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
           </div>
         </div>
       ) : null}
-      <div className="mb-6 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] sm:text-sm opacity-80">
+      <div className="mb-6 flex w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[11px] sm:text-sm opacity-80">
         <Link href="/leagues" className="hover:underline">Leagues</Link>
         <span>/</span>
         {league ? (
