@@ -6,9 +6,17 @@ type Props = {
   points: Point[];
   label?: string;
   subLabel?: string;
+  baseline?: number;
+  tickStep?: number;
 };
 
-export default function PicksChart({ points, label = "Historique des picks", subLabel }: Props) {
+export default function PicksChart({
+  points,
+  label = "Historique des picks",
+  subLabel,
+  baseline = 1000,
+  tickStep = 50,
+}: Props) {
   if (!points.length) {
     return (
       <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-white/70 text-sm">
@@ -23,9 +31,12 @@ export default function PicksChart({ points, label = "Historique des picks", sub
 
   const minX = 0;
   const maxX = Math.max(points.length - 1, 1);
-  const minY = Math.min(...points.map((p) => p.y));
-  const maxY = Math.max(...points.map((p) => p.y));
-  const rangeY = maxY - minY || 1;
+  const safeStep = Number.isFinite(tickStep) && tickStep > 0 ? tickStep : 50;
+  const dataMinY = Math.min(...points.map((p) => p.y), baseline);
+  const dataMaxY = Math.max(...points.map((p) => p.y), baseline);
+  const minY = Math.floor(dataMinY / safeStep) * safeStep;
+  const maxY = Math.ceil(dataMaxY / safeStep) * safeStep;
+  const rangeY = maxY - minY || safeStep;
 
   const mapX = (x: number) =>
     padding + (points.length === 1 ? (width - 2 * padding) / 2 : (x / maxX) * (width - 2 * padding));
@@ -52,8 +63,10 @@ export default function PicksChart({ points, label = "Historique des picks", sub
   };
   const linePath = buildSmoothPath(mapped);
   const areaPath = `${linePath} L ${width - padding},${height - padding} L ${padding},${height - padding} Z`;
-  const ticks = 6;
-  const ySteps = Array.from({ length: ticks }, (_, i) => minY + (rangeY / (ticks - 1)) * i);
+  const ySteps: number[] = [];
+  for (let value = minY; value <= maxY + 1e-9; value += safeStep) {
+    ySteps.push(value);
+  }
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-white">
@@ -90,7 +103,7 @@ export default function PicksChart({ points, label = "Historique des picks", sub
               textAnchor="end"
               fill="rgba(255,255,255,0.6)"
             >
-              {val.toFixed(2)}
+              ${Math.round(val)}
             </text>
           </g>
         ))}

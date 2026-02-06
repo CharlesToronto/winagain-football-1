@@ -43,6 +43,7 @@ const V3_COVERAGE_MIN = 0.3;
 const CURRENT_SEASON = 2025;
 const SETTINGS_STORAGE_PREFIX = "winagain:algo-settings:team:";
 const SCAN_STORAGE_KEY = "winagain:daily-scanner:last";
+const FAVORITE_COMPETITIONS_STORAGE_KEY = "winagain:fav_competition_ids";
 const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
 const TEAM_EVENT_NAME = "algo-settings-team-updated";
 
@@ -491,7 +492,45 @@ export default function DailyScannerPanel() {
   const [progress, setProgress] = useState(0);
   const [dayTab, setDayTab] = useState<"today" | "tomorrow">("today");
   const [hideDiscouraged, setHideDiscouraged] = useState(true);
+  const [favoriteCompetitionIds, setFavoriteCompetitionIds] = useState<Set<number>>(
+    () => new Set()
+  );
+  const [leagueHistoryStats, setLeagueHistoryStats] = useState<
+    Record<number, { total: number; hits: number; hitRate: number }>
+  >({});
   const cacheRef = useRef<Map<string, TeamEval>>(new Map());
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(FAVORITE_COMPETITIONS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      const cleaned = parsed
+        .map((value) => (typeof value === "number" && Number.isFinite(value) ? value : null))
+        .filter((value): value is number => value != null);
+      setFavoriteCompetitionIds(new Set(cleaned));
+    } catch {
+      // Ignore storage errors
+    }
+  }, []);
+
+  const toggleFavoriteCompetitionId = (id: number) => {
+    setFavoriteCompetitionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      try {
+        window.localStorage.setItem(
+          FAVORITE_COMPETITIONS_STORAGE_KEY,
+          JSON.stringify(Array.from(next))
+        );
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
+  };
 
   const discouragedCompetitionKeys = useMemo(
     () =>
@@ -553,6 +592,61 @@ export default function DailyScannerPanel() {
       return true;
     });
   }, [results, dayTab, todayKey, tomorrowKey, hideDiscouraged]);
+
+  const leagueIdsForHistory = useMemo(() => {
+    return Array.from(
+      new Set(
+        filteredResults
+          .map((row) => row.competitionId)
+          .filter((id): id is number => Number.isFinite(id))
+          .map((id) => Number(id))
+      )
+    ).sort((a, b) => a - b);
+  }, [filteredResults]);
+
+  const leagueIdsForHistoryKey = useMemo(() => leagueIdsForHistory.join(","), [leagueIdsForHistory]);
+
+  useEffect(() => {
+    let active = true;
+
+    const load = async () => {
+      if (!leagueIdsForHistory.length) {
+        setLeagueHistoryStats({});
+        return;
+      }
+
+      const { data, error } = await supabaseBrowser
+        .from("daily_algo_picks_v3")
+        .select("league_id,status")
+        .in("league_id", leagueIdsForHistory);
+
+      if (!active) return;
+      if (error) {
+        setLeagueHistoryStats({});
+        return;
+      }
+
+      const map: Record<number, { total: number; hits: number; hitRate: number }> = {};
+      (data ?? []).forEach((row: any) => {
+        const leagueId = Number(row?.league_id);
+        if (!Number.isFinite(leagueId) || !leagueId) return;
+        if (!map[leagueId]) map[leagueId] = { total: 0, hits: 0, hitRate: 0 };
+        map[leagueId].total += 1;
+        if (row?.status === "hit") map[leagueId].hits += 1;
+      });
+
+      Object.values(map).forEach((entry) => {
+        entry.hitRate = entry.total ? (entry.hits / entry.total) * 100 : 0;
+      });
+
+      setLeagueHistoryStats(map);
+    };
+
+    load();
+    return () => {
+      active = false;
+    };
+  }, [leagueIdsForHistoryKey]);
 
   const summaryStats = useMemo(() => {
     const count = filteredResults.length;
@@ -1234,13 +1328,50 @@ export default function DailyScannerPanel() {
               }, new Map<string, { id: string; name: string; country: string | null; logo: string | null; items: ScanResult[] }>())
               .values()
           )
-            .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
+            .sort((a, b) => {
+              const idA = Number(a.id);
+              const idB = Number(b.id);
+              const favA = Number.isFinite(idA) ? favoriteCompetitionIds.has(idA) : false;
+              const favB = Number.isFinite(idB) ? favoriteCompetitionIds.has(idB) : false;
+              if (favA !== favB) return favA ? -1 : 1;
+              return (a.name ?? "").localeCompare(b.name ?? "");
+            })
             .map((group) => (
               <details
                 key={group.id}
                 className="group -mx-4 px-2 rounded-xl bg-transparent"
               >
-                <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none rounded-xl border border-white/10 group-open:border-transparent text-[11px]">
+                <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none rounded-xl border border-white/10 group-open:border-transparent text-[11px] list-none [&::-webkit-details-marker]:hidden">
+                  {(() => {
+                    const leagueId = Number(group.id);
+                    if (!Number.isFinite(leagueId)) {
+                      return <div className="w-6" aria-hidden />;
+                    }
+                    const isFavorite = favoriteCompetitionIds.has(leagueId);
+                    return (
+                      <button
+                        type="button"
+                        className={`shrink-0 rounded p-1 text-[18px] leading-none transition ${
+                          isFavorite
+                            ? "text-amber-300 hover:text-amber-200"
+                            : "text-white/30 hover:text-white/60"
+                        }`}
+                        aria-label={
+                          isFavorite
+                            ? `Retirer ${group.name} des favoris`
+                            : `Ajouter ${group.name} aux favoris`
+                        }
+                        aria-pressed={isFavorite}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          toggleFavoriteCompetitionId(leagueId);
+                        }}
+                      >
+                        <span aria-hidden="true">{isFavorite ? "★" : "☆"}</span>
+                      </button>
+                    );
+                  })()}
                   {group.logo ? (
                     <img
                       src={group.logo}
@@ -1256,6 +1387,20 @@ export default function DailyScannerPanel() {
                     </div>
                     <div className="text-[10px] text-white/60 flex items-center gap-2">
                       <span>{group.items.length} matchs</span>
+                      {(() => {
+                        const leagueId = Number(group.id);
+                        if (!Number.isFinite(leagueId)) return null;
+                        const stats = leagueHistoryStats[leagueId];
+                        if (!stats?.total) return null;
+                        return (
+                          <>
+                            <span className="text-white/40">•</span>
+                            <span className="tabular-nums text-[11px] font-medium">
+                              Hit rate {stats.hitRate.toFixed(1)}% • {stats.total} picks
+                            </span>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                   <span className="text-white/50 transition-transform group-open:rotate-180 animate-pulse group-open:animate-none motion-reduce:animate-none">

@@ -6,6 +6,8 @@ import Link from "next/link";
 import { IconSearch } from "@/app/components/icons";
 import { COMPETITION_IDS_BY_COUNTRY } from "@/app/lib/data/competitionIds";
 
+const FAVORITE_COMPETITIONS_STORAGE_KEY = "winagain:fav_competition_ids";
+
 // TOP 5 major leagues
 const TOP_LEAGUES = [
   { id: 39, name: "Premier League", country: "England", logo: "https://media.api-sports.io/football/leagues/39.png" },
@@ -27,6 +29,39 @@ export default function LeaguesPage() {
   const [countryFilter, setCountryFilter] = useState("all");
   const [expanded, setExpanded] = useState(false);
   const [competitionIndex, setCompetitionIndex] = useState<Record<number, { name?: string }>>({});
+  const [favoriteCompetitionIds, setFavoriteCompetitionIds] = useState<Set<number>>(() => new Set());
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(FAVORITE_COMPETITIONS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      const cleaned = parsed
+        .map((value) => (typeof value === "number" && Number.isFinite(value) ? value : null))
+        .filter((value): value is number => value != null);
+      setFavoriteCompetitionIds(new Set(cleaned));
+    } catch {
+      // Ignore storage errors
+    }
+  }, []);
+
+  const toggleFavoriteCompetitionId = (id: number) => {
+    setFavoriteCompetitionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      try {
+        window.localStorage.setItem(
+          FAVORITE_COMPETITIONS_STORAGE_KEY,
+          JSON.stringify(Array.from(next))
+        );
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     let active = true;
@@ -74,6 +109,17 @@ export default function LeaguesPage() {
         l.country.toLowerCase().includes(q)
     );
   }, [query, countryFilter, leaguesData]);
+
+  const pinnedLeagues = useMemo(() => {
+    const indexed = filteredLeagues.map((league, index) => ({ league, index }));
+    indexed.sort((a, b) => {
+      const favA = favoriteCompetitionIds.has(a.league.id);
+      const favB = favoriteCompetitionIds.has(b.league.id);
+      if (favA !== favB) return favA ? -1 : 1;
+      return a.index - b.index;
+    });
+    return indexed.map(({ league }) => league);
+  }, [filteredLeagues, favoriteCompetitionIds]);
 
   const countries = useMemo(() => {
     const seen = new Set<string>();
@@ -129,6 +175,25 @@ export default function LeaguesPage() {
               key={l.id}
               className="flex flex-col items-center gap-2 sm:gap-4 text-center bg-white/5 border-white/10 text-white backdrop-blur-sm !p-2 sm:!p-4"
             >
+              <div className="w-full flex items-start justify-start">
+                <button
+                  type="button"
+                  className={`rounded p-1 text-[18px] leading-none transition ${
+                    favoriteCompetitionIds.has(l.id)
+                      ? "text-amber-300 hover:text-amber-200"
+                      : "text-white/30 hover:text-white/60"
+                  }`}
+                  aria-label={
+                    favoriteCompetitionIds.has(l.id)
+                      ? `Retirer ${l.name} des favoris`
+                      : `Ajouter ${l.name} aux favoris`
+                  }
+                  aria-pressed={favoriteCompetitionIds.has(l.id)}
+                  onClick={() => toggleFavoriteCompetitionId(l.id)}
+                >
+                  <span aria-hidden="true">{favoriteCompetitionIds.has(l.id) ? "★" : "☆"}</span>
+                </button>
+              </div>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={l.logo} className="h-10 w-10 sm:h-16 sm:w-16" alt={l.name} />
               <div>
@@ -157,12 +222,31 @@ export default function LeaguesPage() {
 
         {expanded && (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-            {filteredLeagues.map((l) => (
+            {pinnedLeagues.map((l) => (
               <Card
                 key={l.id}
                 className="flex items-center justify-between bg-white/5 border-white/10 text-white backdrop-blur-sm !p-2 sm:!p-4"
               >
                 <div className="flex items-center gap-2 sm:gap-3">
+                  <button
+                    type="button"
+                    className={`rounded p-1 text-[18px] leading-none transition ${
+                      favoriteCompetitionIds.has(l.id)
+                        ? "text-amber-300 hover:text-amber-200"
+                        : "text-white/30 hover:text-white/60"
+                    }`}
+                    aria-label={
+                      favoriteCompetitionIds.has(l.id)
+                        ? `Retirer ${l.name} des favoris`
+                        : `Ajouter ${l.name} aux favoris`
+                    }
+                    aria-pressed={favoriteCompetitionIds.has(l.id)}
+                    onClick={() => toggleFavoriteCompetitionId(l.id)}
+                  >
+                    <span aria-hidden="true">
+                      {favoriteCompetitionIds.has(l.id) ? "★" : "☆"}
+                    </span>
+                  </button>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={`https://media.api-sports.io/football/leagues/${l.id}.png`}

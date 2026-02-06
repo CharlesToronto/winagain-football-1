@@ -504,86 +504,86 @@ export default function BacktestView({
             </div>
           ) : (
             <>
-              <div className="md:hidden space-y-4">
-                <div className="flex flex-nowrap gap-4 overflow-x-auto no-scrollbar snap-x snap-mandatory">
-                  <div className="snap-start shrink-0 w-[85%]">
-                    <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0 text-center">
-                      <p className="text-sm text-white/70">Picks</p>
-                      <p className="text-3xl font-semibold">{picksCount}</p>
-                      <p className="text-xs text-white/60">
-                        Range: {range === "season" ? "Season" : `${range} matches`}
-                      </p>
-                    </Card>
-                  </div>
-                  <div className="snap-start shrink-0 w-[85%]">
-                    <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0 text-center">
-                      <p className="text-sm text-white/70">Hits</p>
-                      <p className="text-3xl font-semibold">{hits}</p>
-                      <p className="text-xs text-white/60">
-                        Threshold {settings.threshold.toFixed(2)}
-                      </p>
-                    </Card>
-                  </div>
-                </div>
-                <div className="flex flex-nowrap gap-4 overflow-x-auto no-scrollbar snap-x snap-mandatory">
-                  <div className="snap-start shrink-0 w-[85%]">
-                    <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0 text-center">
-                      <p className="text-sm text-white/70">Hit Rate</p>
-                      <p className="text-3xl font-semibold">{hitRate.toFixed(1)}%</p>
-                      <p className="text-xs text-white/60">
-                        Rolling window {settings.windowSize}
-                      </p>
-                    </Card>
-                  </div>
-                  <div className="snap-start shrink-0 w-[85%]">
-                    <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0 text-center">
-                      <p className="text-sm text-white/70">Coverage</p>
-                      <p className="text-3xl font-semibold">{coverage.toFixed(1)}%</p>
-                      <p className="text-xs text-white/60">Based on picks in range</p>
-                    </Card>
-                  </div>
-                </div>
-              </div>
+	              <div className="md:hidden space-y-4">
+	                <div className="flex flex-nowrap gap-4 overflow-x-auto no-scrollbar snap-x snap-mandatory">
+	                  <div className="snap-start shrink-0 w-[85%]">
+	                    <Card className="!bg-gradient-to-br from-indigo-900 via-blue-800 to-sky-600 text-white !border-0 text-center">
+	                      <p className="text-sm text-white/70">Picks</p>
+	                      <p className="text-3xl font-semibold">{picksCount}</p>
+	                      <p className="text-xs text-white/60">
+	                        Range: {range === "season" ? "Season" : `${range} matches`}
+	                      </p>
+	                    </Card>
+	                  </div>
+	                  <div className="snap-start shrink-0 w-[85%]">
+	                    <Card className="!bg-gradient-to-br from-indigo-900 via-blue-800 to-sky-600 text-white !border-0 text-center">
+	                      <p className="text-sm text-white/70">Hits</p>
+	                      <p className="text-3xl font-semibold">{hits}</p>
+	                      <p className="text-xs text-white/60">
+	                        Threshold {settings.threshold.toFixed(2)}
+	                      </p>
+	                    </Card>
+	                  </div>
+	                </div>
+	                <div className="flex flex-nowrap gap-4 overflow-x-auto no-scrollbar snap-x snap-mandatory">
+	                  <div className="snap-start shrink-0 w-[85%]">
+	                    <Card className="!bg-gradient-to-br from-indigo-900 via-blue-800 to-sky-600 text-white !border-0 text-center">
+	                      <p className="text-sm text-white/70">Hit Rate</p>
+	                      <p className="text-3xl font-semibold">{hitRate.toFixed(1)}%</p>
+	                      <p className="text-xs text-white/60">
+	                        Rolling window {settings.windowSize}
+	                      </p>
+	                    </Card>
+	                  </div>
+	                  <div className="snap-start shrink-0 w-[85%]">
+	                    <Card className="!bg-gradient-to-br from-indigo-900 via-blue-800 to-sky-600 text-white !border-0 text-center">
+	                      <p className="text-sm text-white/70">Coverage</p>
+	                      <p className="text-3xl font-semibold">{coverage.toFixed(1)}%</p>
+	                      <p className="text-xs text-white/60">Based on picks in range</p>
+	                    </Card>
+	                  </div>
+	                </div>
+	              </div>
 
-              <div className="hidden md:grid md:grid-cols-4 gap-4">
-                <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0">
-                  <p className="text-sm text-white/70">Picks</p>
-                  <p className="text-3xl font-semibold">{picksCount}</p>
-                  <p className="text-xs text-white/60">
-                    Range: {range === "season" ? "Season" : `${range} matches`}
-                  </p>
-                </Card>
-                <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0">
-                  <p className="text-sm text-white/70">Hits</p>
-                  <p className="text-3xl font-semibold">{hits}</p>
-                  <p className="text-xs text-white/60">
-                    Threshold {settings.threshold.toFixed(2)}
-                  </p>
-                </Card>
-                <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0">
-                  <p className="text-sm text-white/70">Hit Rate</p>
-                  <p className="text-3xl font-semibold">{hitRate.toFixed(1)}%</p>
-                  <p className="text-xs text-white/60">
-                    Rolling window {settings.windowSize}
-                  </p>
-                </Card>
-                <Card className="!bg-gradient-to-br from-orange-600 via-orange-500 to-orange-700 text-white !border-0">
-                  <p className="text-sm text-white/70">Coverage</p>
-                  <p className="text-3xl font-semibold">{coverage.toFixed(1)}%</p>
-                  <p className="text-xs text-white/60">Based on picks in range</p>
-                </Card>
-              </div>
+	              <div className="hidden md:grid md:grid-cols-4 gap-4">
+	                <Card className="!bg-gradient-to-br from-indigo-900 via-blue-800 to-sky-600 text-white !border-0">
+	                  <p className="text-sm text-white/70">Picks</p>
+	                  <p className="text-3xl font-semibold">{picksCount}</p>
+	                  <p className="text-xs text-white/60">
+	                    Range: {range === "season" ? "Season" : `${range} matches`}
+	                  </p>
+	                </Card>
+	                <Card className="!bg-gradient-to-br from-indigo-900 via-blue-800 to-sky-600 text-white !border-0">
+	                  <p className="text-sm text-white/70">Hits</p>
+	                  <p className="text-3xl font-semibold">{hits}</p>
+	                  <p className="text-xs text-white/60">
+	                    Threshold {settings.threshold.toFixed(2)}
+	                  </p>
+	                </Card>
+	                <Card className="!bg-gradient-to-br from-indigo-900 via-blue-800 to-sky-600 text-white !border-0">
+	                  <p className="text-sm text-white/70">Hit Rate</p>
+	                  <p className="text-3xl font-semibold">{hitRate.toFixed(1)}%</p>
+	                  <p className="text-xs text-white/60">
+	                    Rolling window {settings.windowSize}
+	                  </p>
+	                </Card>
+	                <Card className="!bg-gradient-to-br from-indigo-900 via-blue-800 to-sky-600 text-white !border-0">
+	                  <p className="text-sm text-white/70">Coverage</p>
+	                  <p className="text-3xl font-semibold">{coverage.toFixed(1)}%</p>
+	                  <p className="text-xs text-white/60">Based on picks in range</p>
+	                </Card>
+	              </div>
             </>
           )}
         </div>
       </div>
 
-      {!loading && !error && (
-        <Card className="bg-white/10 border-orange-400/60 text-white">
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-            <h3 className="text-lg font-semibold">Latest Picks</h3>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
+	      {!loading && !error && (
+	        <Card className="bg-white/10 border-sky-400/60 text-white">
+	          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+	            <h3 className="text-lg font-semibold">Latest Picks</h3>
+	            <div className="flex flex-wrap items-center gap-2">
+	              <button
                 type="button"
                 aria-pressed={showAllLatest}
                 onClick={() => setShowAllLatest((prev) => !prev)}

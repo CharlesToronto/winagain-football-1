@@ -23,7 +23,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {/* Sidebar */}
         <div
           className="
-    hidden md:flex mobile-hide fixed left-0 top-0 h-full w-64 
+    hidden md:flex mobile-hide fixed left-0 top-14 h-[calc(100dvh-56px)] w-64 
     bg-transparent 
     backdrop-blur-xl 
     border-r border-white/10 

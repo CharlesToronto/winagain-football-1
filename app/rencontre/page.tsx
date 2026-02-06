@@ -41,6 +41,11 @@ type TeamMarketStats = {
   over_3_5: number | null;
 };
 
+type LeagueHistoryRow = {
+  league_id: number | null;
+  status: string | null;
+};
+
 function startOfDay(value: Date) {
   return new Date(value.getFullYear(), value.getMonth(), value.getDate());
 }
@@ -191,6 +196,29 @@ export default async function RencontrePage({
     });
   }
 
+  const leagueHistoryStats = new Map<number, { total: number; hits: number; hitRate: number }>();
+  if (competitionIds.length > 0) {
+    const { data: leagueRows, error: leagueError } = await supabase
+      .from("daily_algo_picks_v3")
+      .select("league_id,status")
+      .in("league_id", competitionIds);
+
+    if (!leagueError) {
+      (leagueRows ?? []).forEach((row: LeagueHistoryRow) => {
+        const leagueId = Number(row?.league_id);
+        if (!Number.isFinite(leagueId) || !leagueId) return;
+        const current = leagueHistoryStats.get(leagueId) ?? { total: 0, hits: 0, hitRate: 0 };
+        current.total += 1;
+        if (row?.status === "hit") current.hits += 1;
+        leagueHistoryStats.set(leagueId, current);
+      });
+
+      leagueHistoryStats.forEach((value) => {
+        value.hitRate = value.total ? (value.hits / value.total) * 100 : 0;
+      });
+    }
+  }
+
   const teamStatsMap = new Map<number, TeamMarketStats>();
   if (teamIds.length > 0) {
     const { data: teamStats } = await supabase
@@ -325,6 +353,7 @@ export default async function RencontrePage({
                     const uniqueRounds = Array.from(new Set(roundLabels));
                     const competitionRound =
                       uniqueRounds.length === 1 ? uniqueRounds[0] : null;
+                    const leagueStats = leagueHistoryStats.get(group.competition.id);
                     return (
                       <details
                         key={`competition-${section.key}-${group.competition.id}-${activeDay}`}
@@ -344,6 +373,14 @@ export default async function RencontrePage({
                             <div className="font-semibold truncate text-[12px]">{competitionLabel}</div>
                             <div className="text-[10px] text-white/60 flex items-center gap-2">
                               <span>{group.fixtures.length} matchs</span>
+                              {leagueStats?.total ? (
+                                <>
+                                  <span className="text-white/40">•</span>
+                                  <span className="tabular-nums text-[11px] font-medium">
+                                    Hit rate {leagueStats.hitRate.toFixed(1)}% • {leagueStats.total} picks
+                                  </span>
+                                </>
+                              ) : null}
                               {competitionRound ? (
                                 <>
                                   <span className="text-white/40">•</span>
