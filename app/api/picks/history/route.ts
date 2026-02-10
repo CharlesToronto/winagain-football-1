@@ -97,6 +97,9 @@ export async function GET(request: Request) {
     const res = NextResponse.json({ items: enriched });
     // Explicitly prevent caching. We rely on live DB state (statuses change after resolve).
     res.headers.set("Cache-Control", "no-store, max-age=0");
+    res.headers.set("Pragma", "no-cache");
+    res.headers.set("Expires", "0");
+    res.headers.set("Surrogate-Control", "no-store");
     return res;
   } catch (err: any) {
     return NextResponse.json(

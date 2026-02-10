@@ -21,6 +21,13 @@ import {
   type BacktestFixture,
 } from "@/lib/analysisEngine/overUnderBacktest";
 import { logAlgoEvent } from "@/lib/adapters/algoEvents";
+import {
+  clearSearchBgScanCancel,
+  isSearchBgScanCancelRequested,
+  requestSearchBgScanCancel,
+  writeSearchBgScanState,
+  type SearchBgScanState,
+} from "@/lib/searchAlgoScanBackground";
 
 const WINDOWS = [10, 15, 20, 25, 30];
 const BUCKETS = [3, 5];
@@ -41,8 +48,14 @@ const MIN_ODDS = 1.18;
 const MIN_ODDS_RETRY = 1.2;
 const V3_COVERAGE_MIN = 0.3;
 const CURRENT_SEASON = 2025;
+const SCAN_TIMEZONE = "America/Toronto";
+const SEARCH_CACHE_TABLE = "search_algo_picks_cache";
+const SEARCH_RUNS_TABLE = "search_algo_scan_runs";
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SCAN_RESET_MINUTES = 1;
+const STALE_RUN_MINUTES = 20;
+const SEARCH_SESSION_CACHE_PREFIX = "winagain:search-algo:cache:";
 const SETTINGS_STORAGE_PREFIX = "winagain:algo-settings:team:";
-const SCAN_STORAGE_KEY = "winagain:daily-scanner:last";
 const FAVORITE_COMPETITIONS_STORAGE_KEY = "winagain:fav_competition_ids";
 const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
 const TEAM_EVENT_NAME = "algo-settings-team-updated";
@@ -74,6 +87,15 @@ type TeamEval = {
     valueScore: number;
     roiScore: number;
   };
+};
+
+type ScanRunRow = {
+  scan_date: string;
+  status: "running" | "done" | "error";
+  started_at: string;
+  finished_at: string | null;
+  error: string | null;
+  rows_count: number | null;
 };
 
 type ScanResult = {
@@ -235,9 +257,15 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function fetchFixtureOdds(
   fixtureId: number,
   leagueId: number | null,
-  season: number | null
+  season: number | null,
+  signal?: AbortSignal
 ): Promise<FixtureOdds | null> {
   if (!Number.isFinite(fixtureId)) return null;
+  if (signal?.aborted) {
+    const err = new Error("Aborted");
+    (err as any).name = "AbortError";
+    throw err;
+  }
   const resolvedSeason =
     Number.isFinite(season) && (season ?? 0) > 0 ? (season as number) : CURRENT_SEASON;
   if (!Number.isFinite(resolvedSeason)) return null;
@@ -252,18 +280,36 @@ async function fetchFixtureOdds(
   return oddsLimiter(async () => {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const res = await fetch(`/api/odds/fixture?${params.toString()}`);
+        if (signal?.aborted) {
+          const err = new Error("Aborted");
+          (err as any).name = "AbortError";
+          throw err;
+        }
+        const res = await fetch(`/api/odds/fixture?${params.toString()}`, { signal });
         if (res.ok) {
           const data = await res.json();
           return data?.odds ?? null;
         }
         if (res.status === 429 && attempt === 0) {
+          if (signal?.aborted) {
+            const err = new Error("Aborted");
+            (err as any).name = "AbortError";
+            throw err;
+          }
           await sleep(600);
           continue;
         }
         return null;
-      } catch {
+      } catch (err: any) {
+        if (err?.name === "AbortError" || signal?.aborted) {
+          throw err;
+        }
         if (attempt === 0) {
+          if (signal?.aborted) {
+            const abortErr = new Error("Aborted");
+            (abortErr as any).name = "AbortError";
+            throw abortErr;
+          }
           await sleep(600);
           continue;
         }
@@ -488,8 +534,8 @@ export default function DailyScannerPanel() {
   const [results, setResults] = useState<ScanResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastScanInfo, setLastScanInfo] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
+  const [scanInfoByDate, setScanInfoByDate] = useState<Record<string, string | null>>({});
+  const [scanRunsByDate, setScanRunsByDate] = useState<Record<string, ScanRunRow | null>>({});
   const [dayTab, setDayTab] = useState<"today" | "tomorrow">("today");
   const [hideDiscouraged, setHideDiscouraged] = useState(true);
   const [favoriteCompetitionIds, setFavoriteCompetitionIds] = useState<Set<number>>(
@@ -499,6 +545,18 @@ export default function DailyScannerPanel() {
     Record<number, { total: number; hits: number; hitRate: number }>
   >({});
   const cacheRef = useRef<Map<string, TeamEval>>(new Map());
+  const cancelRequestedRef = useRef(false);
+  const activeScanIdRef = useRef<string | null>(null);
+  const oddsAbortControllerRef = useRef<AbortController | null>(null);
+  const cacheUnsupportedColumnsRef = useRef<Set<string>>(new Set());
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -535,20 +593,22 @@ export default function DailyScannerPanel() {
   const discouragedCompetitionKeys = useMemo(
     () =>
       new Set([
-        "Israel|||Liga Leumit",
+        "Bulgaria|||First League",
+        "Belgium|||Jupiler Pro League",
+        "Greece|||Super League 1",
+        "Hungary|||NB I",
         "Scotland|||Football League - Highland League",
         "Scotland|||League One",
         "Belgium|||Challenger Pro League",
         "Hungary|||NB II",
         "Italy|||Serie C - Girone A",
+        "Romania|||Liga I",
+        "Serbia|||Super Liga",
       ]),
     []
   );
 
-  const timeZone = useMemo(
-    () => Intl.DateTimeFormat().resolvedOptions().timeZone ?? "local",
-    []
-  );
+  const timeZone = SCAN_TIMEZONE;
 
   const isDiscouragedCompetition = (country: string | null, name: string | null) => {
     if (!country || !name) return false;
@@ -563,23 +623,89 @@ export default function DailyScannerPanel() {
       day: "2-digit",
     }).format(value);
 
+  const getTzParts = (date: Date) => {
+    const dtf = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    const parts = dtf.formatToParts(date).reduce<Record<string, string>>((acc, part) => {
+      if (part.type !== "literal") acc[part.type] = part.value;
+      return acc;
+    }, {});
+    return {
+      year: Number(parts.year),
+      month: Number(parts.month),
+      day: Number(parts.day),
+      hour: Number(parts.hour),
+      minute: Number(parts.minute),
+      second: Number(parts.second),
+    };
+  };
+
+  const getTimezoneOffset = (date: Date) => {
+    const parts = getTzParts(date);
+    const asUTC = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+    return (asUTC - date.getTime()) / 60000;
+  };
+
+  const getUtcRangeForDayOffset = (offsetDays: number, baseMs = Date.now()) => {
+    const base = new Date(baseMs + offsetDays * DAY_MS);
+    const parts = getTzParts(base);
+    const midnightUTC = Date.UTC(parts.year, parts.month - 1, parts.day, 0, 0, 0);
+    const offset = getTimezoneOffset(new Date(midnightUTC));
+    const start = new Date(midnightUTC - offset * 60000);
+    const end = new Date(start.getTime() + DAY_MS);
+    const dateKey = `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+    return { start, end, dateKey };
+  };
+
+  const dayAnchor = toDateKey(new Date());
+  const todayRange = useMemo(() => getUtcRangeForDayOffset(0), [dayAnchor]);
+  const tomorrowRange = useMemo(() => getUtcRangeForDayOffset(1), [dayAnchor]);
+
   const todayLabel = useMemo(() => {
-    const now = new Date();
-    return now.toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "short" });
-  }, []);
+    return new Date(todayRange.start).toLocaleDateString("fr-FR", {
+      timeZone,
+      weekday: "long",
+      day: "2-digit",
+      month: "short",
+    });
+  }, [todayRange.start, timeZone]);
 
   const tomorrowLabel = useMemo(() => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    return tomorrow.toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "short" });
-  }, []);
+    return new Date(tomorrowRange.start).toLocaleDateString("fr-FR", {
+      timeZone,
+      weekday: "long",
+      day: "2-digit",
+      month: "short",
+    });
+  }, [tomorrowRange.start, timeZone]);
 
-  const todayKey = useMemo(() => toDateKey(new Date()), [timeZone]);
-  const tomorrowKey = useMemo(() => {
-    const next = new Date();
-    next.setDate(next.getDate() + 1);
-    return toDateKey(next);
-  }, [timeZone]);
+  const todayKey = todayRange.dateKey;
+  const tomorrowKey = tomorrowRange.dateKey;
+
+  const activeDateKey = dayTab === "today" ? todayKey : tomorrowKey;
+  const lastScanInfo = scanInfoByDate[activeDateKey] ?? null;
+  const todayRun = scanRunsByDate[todayKey] ?? null;
+  const tomorrowRun = scanRunsByDate[tomorrowKey] ?? null;
+  const isRunStale = (run: ScanRunRow | null) => {
+    if (!run?.started_at) return true;
+    const date = new Date(run.started_at);
+    if (!Number.isFinite(date.getTime())) return true;
+    return Date.now() - date.getTime() > STALE_RUN_MINUTES * 60_000;
+  };
+
+  const isInResetWindow = (() => {
+    const parts = getTzParts(new Date());
+    if (!Number.isFinite(parts.hour) || !Number.isFinite(parts.minute)) return false;
+    return parts.hour === 0 && parts.minute < SCAN_RESET_MINUTES;
+  })();
 
   const filteredResults = useMemo(() => {
     const key = dayTab === "today" ? todayKey : tomorrowKey;
@@ -605,6 +731,52 @@ export default function DailyScannerPanel() {
   }, [filteredResults]);
 
   const leagueIdsForHistoryKey = useMemo(() => leagueIdsForHistory.join(","), [leagueIdsForHistory]);
+
+  const withoutDateKey = (list: ScanResult[], dateKey: string) => {
+    return list.filter((row) => {
+      if (!row.dateUtc) return true;
+      const date = new Date(row.dateUtc);
+      if (!Number.isFinite(date.getTime())) return true;
+      return toDateKey(date) !== dateKey;
+    });
+  };
+
+  const normalizeCacheRow = (row: any): ScanResult => ({
+    fixtureId: Number(row?.fixture_id ?? 0),
+    competitionId: row?.league_id != null ? Number(row.league_id) : null,
+    competitionName: row?.competition_name ?? null,
+    competitionCountry: row?.competition_country ?? null,
+    competitionLogo: row?.competition_logo ?? null,
+    season: row?.season != null ? Number(row.season) : null,
+    dateUtc: row?.fixture_date_utc ?? null,
+    homeId: row?.home_id != null ? Number(row.home_id) : null,
+    awayId: row?.away_id != null ? Number(row.away_id) : null,
+    homeName: row?.home_name ?? null,
+    awayName: row?.away_name ?? null,
+    homeLogo: row?.home_logo ?? null,
+    awayLogo: row?.away_logo ?? null,
+    teamId: row?.team_id != null ? Number(row.team_id) : 0,
+    teamName: row?.team_name ?? null,
+    side: row?.side === "away" ? "away" : "home",
+    pick: String(row?.pick ?? ""),
+    probability: Number(row?.probability ?? 0),
+    hitRate: Number(row?.hit_rate ?? 0),
+    coverage: Number(row?.coverage ?? 0),
+    picks: Number(row?.picks_count ?? 0),
+    evaluated: Number(row?.evaluated_count ?? 0),
+    threshold: Number(row?.threshold ?? 0),
+    odd: row?.odd != null ? Number(row.odd) : null,
+    meetsOdds: row?.meets_odds ?? (row?.odd != null ? Number(row.odd) >= MIN_ODDS : true),
+    meetsCriteria: Boolean(row?.meets_criteria),
+    isDiscouraged: Boolean(row?.is_discouraged),
+  });
+
+  const cancelScan = () => {
+    cancelRequestedRef.current = true;
+    const scanId = activeScanIdRef.current;
+    if (scanId) requestSearchBgScanCancel(scanId);
+    oddsAbortControllerRef.current?.abort();
+  };
 
   useEffect(() => {
     let active = true;
@@ -668,37 +840,105 @@ export default function DailyScannerPanel() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    try {
-      const raw = window.localStorage.getItem(SCAN_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as {
-        results?: ScanResult[];
-        lastScanInfo?: string | null;
-      };
-      if (Array.isArray(parsed.results) && parsed.results.length) {
-        setResults(parsed.results);
-        setLastScanInfo(parsed.lastScanInfo ?? null);
+    const restoreFromSession = (dateKey: string) => {
+      try {
+        const raw = window.sessionStorage.getItem(`${SEARCH_SESSION_CACHE_PREFIX}${dateKey}`);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as {
+          results?: ScanResult[];
+          lastScanInfo?: string | null;
+        };
+        if (Array.isArray(parsed.results) && parsed.results.length) {
+          setResults((prev) => [...withoutDateKey(prev, dateKey), ...parsed.results!]);
+        }
+        if (parsed.lastScanInfo) {
+          setScanInfoByDate((prev) => ({ ...prev, [dateKey]: parsed.lastScanInfo ?? null }));
+        }
+      } catch {
+        // Ignore restore errors
       }
-    } catch {
-      // Ignore storage errors
-    }
-  }, []);
+    };
+
+    restoreFromSession(todayKey);
+    restoreFromSession(tomorrowKey);
+  }, [todayKey, tomorrowKey]);
 
   useEffect(() => {
-    if (!loading) {
-      setProgress(0);
-      return;
-    }
-    setProgress(5);
-    const timer = setInterval(() => {
-      setProgress((prev) => {
-        if (prev >= 96) return prev;
-        const next = prev < 80 ? prev + 4 : prev + 1;
-        return Math.min(96, next);
+    let active = true;
+
+    const loadRunsAndCache = async () => {
+      const [todayRunRes, tomorrowRunRes] = await Promise.all([
+        supabaseBrowser
+          .from(SEARCH_RUNS_TABLE)
+          .select("scan_date,status,started_at,finished_at,error,rows_count")
+          .eq("scan_date", todayKey)
+          .maybeSingle(),
+        supabaseBrowser
+          .from(SEARCH_RUNS_TABLE)
+          .select("scan_date,status,started_at,finished_at,error,rows_count")
+          .eq("scan_date", tomorrowKey)
+          .maybeSingle(),
+      ]);
+
+      if (!active) return;
+
+      const todayRun = (todayRunRes.data as ScanRunRow) ?? null;
+      const tomorrowRun = (tomorrowRunRes.data as ScanRunRow) ?? null;
+
+      setScanRunsByDate((prev) => ({
+        ...prev,
+        [todayKey]: todayRun,
+        [tomorrowKey]: tomorrowRun,
+      }));
+
+      setScanInfoByDate((prev) => ({
+        ...prev,
+        ...(todayRun?.status === "error" && todayRun.error
+          ? { [todayKey]: `Erreur: ${todayRun.error}` }
+          : {}),
+        ...(tomorrowRun?.status === "error" && tomorrowRun.error
+          ? { [tomorrowKey]: `Erreur: ${tomorrowRun.error}` }
+          : {}),
+      }));
+
+      const [todayCacheRes, tomorrowCacheRes] = await Promise.all([
+        supabaseBrowser.from(SEARCH_CACHE_TABLE).select("*").eq("scan_date", todayKey),
+        supabaseBrowser.from(SEARCH_CACHE_TABLE).select("*").eq("scan_date", tomorrowKey),
+      ]);
+
+      if (!active) return;
+
+      const todayCached = (todayCacheRes.data ?? []).map(normalizeCacheRow).filter((row) => row.fixtureId);
+      const tomorrowCached = (tomorrowCacheRes.data ?? [])
+        .map(normalizeCacheRow)
+        .filter((row) => row.fixtureId);
+
+      setResults((prev) => {
+        let next = prev;
+        if (todayCached.length) {
+          next = withoutDateKey(next, todayKey);
+          next = [...next, ...todayCached];
+        }
+        if (tomorrowCached.length) {
+          next = withoutDateKey(next, tomorrowKey);
+          next = [...next, ...tomorrowCached];
+        }
+        return next;
       });
-    }, 250);
-    return () => clearInterval(timer);
-  }, [loading]);
+
+      setScanInfoByDate((prev) => ({
+        ...prev,
+        ...(todayCached.length ? { [todayKey]: `${todayCached.length} match(s) en cache` } : {}),
+        ...(tomorrowCached.length ? { [tomorrowKey]: `${tomorrowCached.length} match(s) en cache` } : {}),
+      }));
+    };
+
+    loadRunsAndCache();
+
+    return () => {
+      active = false;
+    };
+  }, [todayKey, tomorrowKey]);
 
   const computeTeamEval = (
     fixtures: BacktestFixture[],
@@ -811,17 +1051,284 @@ export default function DailyScannerPanel() {
     return null;
   };
 
-  const runScan = async () => {
-    setLoading(true);
-    setError(null);
-    setResults([]);
+  const refreshRunForDateKey = async (dateKey: string) => {
+    const { data, error } = await supabaseBrowser
+      .from(SEARCH_RUNS_TABLE)
+      .select("scan_date,status,started_at,finished_at,error,rows_count")
+      .eq("scan_date", dateKey)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const run = (data as ScanRunRow) ?? null;
+    setScanRunsByDate((prev) => ({ ...prev, [dateKey]: run }));
+    return run;
+  };
+
+  const refreshCacheForDateKey = async (dateKey: string) => {
+    const { data, error } = await supabaseBrowser
+      .from(SEARCH_CACHE_TABLE)
+      .select("*")
+      .eq("scan_date", dateKey);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const cached = (data ?? []).map(normalizeCacheRow).filter((row) => row.fixtureId);
+    setResults((prev) => [...withoutDateKey(prev, dateKey), ...cached]);
+    setScanInfoByDate((prev) => ({
+      ...prev,
+      [dateKey]: `${cached.length} match(s) en cache`,
+    }));
+    return cached;
+  };
+
+  const writeCacheForDateKey = async (dateKey: string, rows: ScanResult[]) => {
+    const unsupported = cacheUnsupportedColumnsRef.current;
+    const extractMissingColumn = (value: any) => {
+      const message = String(value?.message ?? "");
+      const match = message.match(/Could not find the '([^']+)' column/i);
+      if (match) return match[1];
+      const match2 = message.match(/column ([a-zA-Z0-9_]+) does not exist/i);
+      if (match2) return match2[1];
+      return null;
+    };
+
+	    const buildRow = (row: ScanResult) => {
+	      const base: Record<string, any> = {
+	        scan_date: dateKey,
+	        fixture_id: row.fixtureId,
+	        league_id: row.competitionId,
+	        competition_name: row.competitionName,
+	        competition_country: row.competitionCountry,
+	        competition_logo: row.competitionLogo,
+	        season: row.season,
+	        fixture_date_utc: row.dateUtc,
+	        home_id: row.homeId,
+	        away_id: row.awayId,
+	        home_name: row.homeName,
+	        away_name: row.awayName,
+	        team_id: row.teamId,
+	        side: row.side,
+	        pick: row.pick,
+	        probability: row.probability,
+	        hit_rate: row.hitRate,
+	        coverage: row.coverage,
+        picks_count: row.picks,
+        evaluated_count: row.evaluated,
+        threshold: row.threshold,
+        odd: row.odd,
+        meets_odds: row.meetsOdds,
+        meets_criteria: row.meetsCriteria,
+        is_discouraged: row.isDiscouraged,
+      };
+      unsupported.forEach((col) => {
+        delete base[col];
+      });
+      return base;
+    };
+
+    const buildPayload = () => rows.map(buildRow);
+    let payload = buildPayload();
+    const chunkSize = 500;
+    const insertAll = async (list: any[]) => {
+      for (let i = 0; i < list.length; i += chunkSize) {
+        const chunk = list.slice(i, i + chunkSize);
+        const { error: insertError } = await supabaseBrowser
+          .from(SEARCH_CACHE_TABLE)
+          .insert(chunk);
+        if (insertError) {
+          throw insertError;
+        }
+      }
+    };
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const { error: deleteError } = await supabaseBrowser
+        .from(SEARCH_CACHE_TABLE)
+        .delete()
+        .eq("scan_date", dateKey);
+
+      if (deleteError) {
+        throw new Error(deleteError.message);
+      }
+
+      if (!payload.length) return;
+
+      try {
+        await insertAll(payload);
+        return;
+      } catch (err: any) {
+        const missing = extractMissingColumn(err);
+        if (!missing || unsupported.has(missing)) {
+          throw new Error(err?.message ?? "Erreur lors de l'insertion du cache.");
+        }
+        unsupported.add(missing);
+        payload = buildPayload();
+      }
+    }
+
+    throw new Error("Schéma Supabase incompatible pour search_algo_picks_cache.");
+  };
+
+  const runScanForDay = async (target: "today" | "tomorrow") => {
+    const range = getUtcRangeForDayOffset(target === "today" ? 0 : 1);
+    const dateKey = range.dateKey;
+    const start = range.start;
+    const end = range.end;
+
+    const safe = (fn: () => void) => {
+      if (!mountedRef.current) return;
+      fn();
+    };
+
+    safe(() => setDayTab(target));
+    safe(() => setError(null));
+
+    if (isInResetWindow) {
+      safe(() =>
+        setScanInfoByDate((prev) => ({
+          ...prev,
+          [dateKey]: "Indisponible entre 00:00 et 00:01 (Toronto).",
+        }))
+      );
+      return;
+    }
+
+    const startedAt = new Date().toISOString();
+    const isStaleRun = (run: ScanRunRow) => {
+      const date = new Date(run.started_at);
+      if (!Number.isFinite(date.getTime())) return true;
+      return Date.now() - date.getTime() > STALE_RUN_MINUTES * 60_000;
+    };
+
+    const baseRun: ScanRunRow = {
+      scan_date: dateKey,
+      status: "running",
+      started_at: startedAt,
+      finished_at: null,
+      error: null,
+      rows_count: null,
+    };
+
+    safe(() => setLoading(true));
     cacheRef.current.clear();
+    cancelRequestedRef.current = false;
+    oddsAbortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    oddsAbortControllerRef.current = abortController;
+
+    let scanId: string | null = null;
+    let bgState: SearchBgScanState | null = null;
+    let cancelWatcher: ReturnType<typeof setInterval> | null = null;
+
+    const updateBgState = (patch: Partial<SearchBgScanState>) => {
+      if (!bgState) return;
+      bgState = {
+        ...bgState,
+        ...patch,
+        updatedAt: new Date().toISOString(),
+        progress:
+          patch.progress == null
+            ? bgState.progress
+            : clamp(Number(patch.progress), 0, 100),
+      };
+      writeSearchBgScanState(bgState);
+    };
+
+    const throwIfCancelled = () => {
+      if (!scanId) return;
+      if (cancelRequestedRef.current) {
+        const err = new Error("Recherche annulée.");
+        (err as any).name = "AbortError";
+        throw err;
+      }
+      if (abortController.signal.aborted) {
+        const err = new Error("Recherche annulée.");
+        (err as any).name = "AbortError";
+        throw err;
+      }
+      if (isSearchBgScanCancelRequested(scanId)) {
+        cancelRequestedRef.current = true;
+        abortController.abort();
+        const err = new Error("Recherche annulée.");
+        (err as any).name = "AbortError";
+        throw err;
+      }
+    };
     try {
-      const now = new Date();
-      const start = new Date(now);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(start);
-      end.setDate(end.getDate() + 2);
+      const { error: insertError } = await supabaseBrowser.from(SEARCH_RUNS_TABLE).insert({
+        scan_date: dateKey,
+        status: "running",
+        started_at: startedAt,
+      });
+
+      if (insertError) {
+        if (insertError.code !== "23505") {
+          throw new Error(insertError.message);
+        }
+
+        const existing = await refreshRunForDateKey(dateKey);
+        if (existing?.status === "done") {
+          await refreshCacheForDateKey(dateKey);
+          return;
+        }
+        if (existing?.status === "running" && !isStaleRun(existing)) {
+          safe(() =>
+            setScanInfoByDate((prev) => ({
+              ...prev,
+              [dateKey]: `Scan déjà en cours (démarré à ${formatTime(existing.started_at)}).`,
+            }))
+          );
+          return;
+        }
+
+        const { error: updateError } = await supabaseBrowser
+          .from(SEARCH_RUNS_TABLE)
+          .update({
+            status: "running",
+            started_at: startedAt,
+            finished_at: null,
+            error: null,
+            rows_count: null,
+          })
+          .eq("scan_date", dateKey);
+
+        if (updateError) {
+          throw new Error(updateError.message);
+        }
+      }
+
+      scanId = `${dateKey}:${startedAt}:${Math.random().toString(16).slice(2)}`;
+      activeScanIdRef.current = scanId;
+      bgState = {
+        scanId,
+        scanDate: dateKey,
+        target,
+        status: "running",
+        startedAt,
+        updatedAt: startedAt,
+        progress: 5,
+        message: "Scan en cours...",
+        rowsCount: null,
+      };
+      writeSearchBgScanState(bgState);
+      cancelWatcher = setInterval(() => {
+        if (!scanId) return;
+        if (isSearchBgScanCancelRequested(scanId)) {
+          cancelRequestedRef.current = true;
+          abortController.abort();
+        }
+      }, 500);
+
+      safe(() => setScanRunsByDate((prev) => ({ ...prev, [dateKey]: baseRun })));
+      safe(() => setScanInfoByDate((prev) => ({ ...prev, [dateKey]: "Scan en cours..." })));
+
+      updateBgState({ progress: 10, message: "Chargement des rencontres..." });
+      throwIfCancelled();
 
       const { data: fixtureRows, error: fixturesError } = await supabaseBrowser
         .from("fixtures")
@@ -846,10 +1353,50 @@ export default function DailyScannerPanel() {
 
       const fixtures = (fixtureRows ?? []) as FixtureLite[];
       if (!fixtures.length) {
-        setLastScanInfo("Aucune rencontre aujourd'hui / demain.");
-        setResults([]);
+        const finishedAt = new Date().toISOString();
+        updateBgState({
+          status: "done",
+          progress: 100,
+          message: "Aucune rencontre sur cette période.",
+          rowsCount: 0,
+        });
+        safe(() =>
+          setScanInfoByDate((prev) => ({
+            ...prev,
+            [dateKey]: "Aucune rencontre sur cette période.",
+          }))
+        );
+        safe(() =>
+          setScanRunsByDate((prev) => ({
+            ...prev,
+            [dateKey]: {
+              ...baseRun,
+              status: "done",
+              finished_at: finishedAt,
+              rows_count: 0,
+            },
+          }))
+        );
+
+        await writeCacheForDateKey(dateKey, []);
+        await supabaseBrowser
+          .from(SEARCH_RUNS_TABLE)
+          .update({
+            status: "done",
+            finished_at: finishedAt,
+            error: null,
+            rows_count: 0,
+          })
+          .eq("scan_date", dateKey);
+        if (scanId) clearSearchBgScanCancel(scanId);
         return;
       }
+
+      updateBgState({
+        progress: 15,
+        message: `${fixtures.length} rencontre(s) chargée(s).`,
+      });
+      throwIfCancelled();
 
       const teamIds = Array.from(
         new Set(
@@ -894,6 +1441,11 @@ export default function DailyScannerPanel() {
       };
 
       const leagueFixturesMap = new Map<number, BacktestFixture[]>();
+      updateBgState({
+        progress: 25,
+        message: "Chargement de l'historique des ligues...",
+      });
+      throwIfCancelled();
       await Promise.all(
         leagueIds.map(async (leagueId) => {
           const currentSeason = leagueSeasonMap.get(leagueId) ?? CURRENT_SEASON;
@@ -908,6 +1460,8 @@ export default function DailyScannerPanel() {
           leagueFixturesMap.set(leagueId, normalized);
         })
       );
+      updateBgState({ progress: 35, message: "Historique chargé." });
+      throwIfCancelled();
 
       const competitionNameMap = new Map<number, string>();
       const competitionCountryMap = new Map<number, string>();
@@ -980,10 +1534,20 @@ export default function DailyScannerPanel() {
       const autoSavedTeams = new Set<number>();
       const output: ScanResult[] = [];
 
-      visibleFixtures.forEach((fixture) => {
+      updateBgState({ progress: 40, message: "Analyse des matchs..." });
+      throwIfCancelled();
+
+      let processedEvaluations = 0;
+      const analysisProgressStart = 40;
+      const analysisProgressEnd = 60;
+      const totalEvalSafe = Math.max(1, totalEvaluations);
+
+      for (const fixture of visibleFixtures) {
+        throwIfCancelled();
+
         const leagueId = Number(fixture.competition_id ?? 0);
         const leagueFixtures = leagueFixturesMap.get(leagueId) ?? [];
-        if (!leagueFixtures.length) return;
+        if (!leagueFixtures.length) continue;
 
         const matchInfo: NextMatchInfo = {
           fixtureId: fixture.id,
@@ -992,12 +1556,16 @@ export default function DailyScannerPanel() {
           awayId: fixture.away?.id ?? null,
         };
 
-        ([
+        const entries = [
           { side: "home" as const, team: fixture.home },
           { side: "away" as const, team: fixture.away },
-        ] as const).forEach((entry) => {
+        ] as const;
+
+        for (const entry of entries) {
           const teamId = Number(entry.team?.id ?? 0);
-          if (!Number.isFinite(teamId)) return;
+          if (!Number.isFinite(teamId)) continue;
+
+          processedEvaluations += 1;
           const cacheKey = `${leagueId}:${teamId}`;
           let cached = bestSettingsCache.get(cacheKey) ?? null;
           let evalResult = cached?.evalResult ?? null;
@@ -1008,7 +1576,7 @@ export default function DailyScannerPanel() {
             meetsCriteria = best?.meetsCriteria ?? true;
             bestSettingsCache.set(cacheKey, best);
           }
-          if (!evalResult) return;
+          if (!evalResult) continue;
 
           if (!teamSettingsMap.has(teamId) && !autoSavedTeams.has(teamId)) {
             const resolvedSettings = evalResult.settings;
@@ -1035,7 +1603,7 @@ export default function DailyScannerPanel() {
           }
 
           const pickResult = computeUpcomingPick(leagueFixtures, matchInfo, evalResult.settings);
-          if (pickResult.status !== "pick" || !pickResult.pick) return;
+          if (pickResult.status !== "pick" || !pickResult.pick) continue;
 
           settingsByRow.set(`${fixture.id}:${teamId}`, evalResult.settings);
           output.push({
@@ -1067,8 +1635,23 @@ export default function DailyScannerPanel() {
             meetsCriteria,
             isDiscouraged: false,
           });
-        });
-      });
+
+          if (processedEvaluations % 25 === 0) {
+            const pct =
+              analysisProgressStart +
+              (processedEvaluations / totalEvalSafe) *
+                (analysisProgressEnd - analysisProgressStart);
+            updateBgState({
+              progress: pct,
+              message: `Analyse ${processedEvaluations}/${totalEvaluations}...`,
+            });
+            await sleep(0);
+          }
+        }
+      }
+
+      updateBgState({ progress: 60, message: "Analyse terminée. Chargement des cotes..." });
+      throwIfCancelled();
 
       output.sort((a, b) => {
         if (b.hitRate !== a.hitRate) return b.hitRate - a.hitRate;
@@ -1085,96 +1668,190 @@ export default function DailyScannerPanel() {
       });
 
       const oddsCache = new Map<number, FixtureOdds | null>();
-      const enrichedOutput = await Promise.all(
-        filteredOutput.map(async (row) => {
-          let odds = oddsCache.get(row.fixtureId) ?? null;
-          if (!oddsCache.has(row.fixtureId)) {
-            odds = await fetchFixtureOdds(row.fixtureId, row.competitionId, row.season);
-            oddsCache.set(row.fixtureId, odds ?? null);
-          }
-          let pick = row.pick;
-          let probability = row.probability;
-          let oddValue = resolveOddForPick(pick, odds);
+      const enrichedOutput: ScanResult[] = [];
+      const oddsProgressStart = 60;
+      const oddsProgressEnd = 90;
+      const oddsTotalSafe = Math.max(1, filteredOutput.length);
 
-          const baseCriteria =
-            row.hitRate >= HIT_MIN &&
-            row.coverage >= V3_COVERAGE_MIN &&
-            row.picks >= MIN_TOTAL_PICKS;
+      for (let idx = 0; idx < filteredOutput.length; idx += 1) {
+        throwIfCancelled();
+        const row = filteredOutput[idx];
 
-          if (
-            baseCriteria &&
-            (oddValue == null || oddValue < MIN_ODDS_RETRY)
-          ) {
-            const settings = settingsByRow.get(`${row.fixtureId}:${row.teamId}`);
-            const leagueFixtures = leagueFixturesMap.get(row.competitionId ?? 0) ?? [];
-            const excludeLine = extractPickLine(pick);
-            if (settings && excludeLine && leagueFixtures.length) {
-              const alt = computeUpcomingPick(
-                leagueFixtures,
-                {
-                  fixtureId: row.fixtureId,
-                  dateUtc: row.dateUtc ?? null,
-                  homeId: row.homeId ?? null,
-                  awayId: row.awayId ?? null,
-                },
-                settings,
-                excludeLine
-              );
-              if (alt.status === "pick" && alt.pick) {
-                const altOdd = resolveOddForPick(alt.pick, odds);
-                const currentOdd = oddValue == null ? 0 : oddValue;
-                if (altOdd != null && altOdd > currentOdd) {
-                  pick = alt.pick;
-                  probability = alt.probability ?? probability;
-                  oddValue = altOdd;
-                }
+        let odds = oddsCache.get(row.fixtureId) ?? null;
+        if (!oddsCache.has(row.fixtureId)) {
+          odds = await fetchFixtureOdds(
+            row.fixtureId,
+            row.competitionId,
+            row.season,
+            abortController.signal
+          );
+          oddsCache.set(row.fixtureId, odds ?? null);
+        }
+        let pick = row.pick;
+        let probability = row.probability;
+        let oddValue = resolveOddForPick(pick, odds);
+
+        const baseCriteria =
+          row.hitRate >= HIT_MIN &&
+          row.coverage >= V3_COVERAGE_MIN &&
+          row.picks >= MIN_TOTAL_PICKS;
+
+        if (baseCriteria && (oddValue == null || oddValue < MIN_ODDS_RETRY)) {
+          const settings = settingsByRow.get(`${row.fixtureId}:${row.teamId}`);
+          const leagueFixtures = leagueFixturesMap.get(row.competitionId ?? 0) ?? [];
+          const excludeLine = extractPickLine(pick);
+          if (settings && excludeLine && leagueFixtures.length) {
+            const alt = computeUpcomingPick(
+              leagueFixtures,
+              {
+                fixtureId: row.fixtureId,
+                dateUtc: row.dateUtc ?? null,
+                homeId: row.homeId ?? null,
+                awayId: row.awayId ?? null,
+              },
+              settings,
+              excludeLine
+            );
+            if (alt.status === "pick" && alt.pick) {
+              const altOdd = resolveOddForPick(alt.pick, odds);
+              const currentOdd = oddValue == null ? 0 : oddValue;
+              if (altOdd != null && altOdd > currentOdd) {
+                pick = alt.pick;
+                probability = alt.probability ?? probability;
+                oddValue = altOdd;
               }
             }
           }
+        }
 
-          const meetsOdds = oddValue == null ? true : oddValue >= MIN_ODDS;
-          const isDiscouraged =
-            isDiscouragedCompetition(row.competitionCountry, row.competitionName) ||
-            pick.trim() === "12";
-          return {
-            ...row,
-            pick,
-            probability,
-            odd: oddValue,
-            meetsOdds,
-            meetsCriteria: row.meetsCriteria,
-            isDiscouraged,
-          };
-        })
-      );
+        const meetsOdds = oddValue == null ? true : oddValue >= MIN_ODDS;
+        const isDiscouraged =
+          isDiscouragedCompetition(row.competitionCountry, row.competitionName) ||
+          pick.trim() === "12";
 
-      setResults(enrichedOutput);
+        enrichedOutput.push({
+          ...row,
+          pick,
+          probability,
+          odd: oddValue,
+          meetsOdds,
+          meetsCriteria: row.meetsCriteria,
+          isDiscouraged,
+        });
+
+        const processed = idx + 1;
+        if (processed === filteredOutput.length || processed % 10 === 0) {
+          const pct =
+            oddsProgressStart +
+            (processed / oddsTotalSafe) * (oddsProgressEnd - oddsProgressStart);
+          updateBgState({
+            progress: pct,
+            message: `Cotes ${processed}/${filteredOutput.length}...`,
+          });
+        }
+      }
+
+      updateBgState({ progress: 90, message: "Cotes chargées." });
+      throwIfCancelled();
+
+      const uniqueOutput = (() => {
+        const rank = (value: ScanResult) => [
+          value.meetsCriteria ? 1 : 0,
+          value.hitRate ?? 0,
+          value.coverage ?? 0,
+          value.probability ?? 0,
+          value.odd ?? 0,
+        ];
+        const isBetter = (candidate: ScanResult, current: ScanResult) => {
+          const a = rank(candidate);
+          const b = rank(current);
+          for (let i = 0; i < a.length; i += 1) {
+            if (a[i] !== b[i]) return a[i] > b[i];
+          }
+          return false;
+        };
+
+        const map = new Map<string, ScanResult>();
+        enrichedOutput.forEach((row) => {
+          const pick = row.pick.trim();
+          const normalized = pick === row.pick ? row : { ...row, pick };
+          const key = `${normalized.fixtureId}:${normalized.pick}`;
+          const current = map.get(key);
+          if (!current) {
+            map.set(key, normalized);
+            return;
+          }
+          if (isBetter(normalized, current)) {
+            map.set(key, normalized);
+          }
+        });
+        return Array.from(map.values());
+      })();
+
+      const summary = `${visibleFixtures.length} match(s) analysé(s) • ${uniqueOutput.length} match(s) retenu(s) • ${totalEvaluations} évaluations`;
+      safe(() => setResults((prev) => [...withoutDateKey(prev, dateKey), ...uniqueOutput]));
+      safe(() => setScanInfoByDate((prev) => ({ ...prev, [dateKey]: summary })));
+
       if (typeof window !== "undefined") {
         try {
-          window.localStorage.setItem(
-            SCAN_STORAGE_KEY,
+          window.sessionStorage.setItem(
+            `${SEARCH_SESSION_CACHE_PREFIX}${dateKey}`,
             JSON.stringify({
-              results: enrichedOutput,
-              lastScanInfo: `${visibleFixtures.length} match(s) analysé(s) • ${filteredOutput.length} match(s) retenu(s) • ${totalEvaluations} évaluations`,
+              results: uniqueOutput,
+              lastScanInfo: summary,
             })
           );
         } catch {
           // Ignore storage errors
         }
       }
-      setLastScanInfo(
-        `${visibleFixtures.length} match(s) analysé(s) • ${filteredOutput.length} match(s) retenu(s) • ${totalEvaluations} évaluations`
+
+      throwIfCancelled();
+
+      updateBgState({ progress: 94, message: "Sauvegarde du cache..." });
+      await writeCacheForDateKey(dateKey, uniqueOutput);
+      updateBgState({ progress: 96, message: "Cache sauvegardé. Finalisation..." });
+
+      const finishedAt = new Date().toISOString();
+      await supabaseBrowser
+        .from(SEARCH_RUNS_TABLE)
+        .update({
+          status: "done",
+          finished_at: finishedAt,
+          error: null,
+          rows_count: uniqueOutput.length,
+        })
+        .eq("scan_date", dateKey);
+      updateBgState({
+        status: "done",
+        progress: 100,
+        message: summary,
+        rowsCount: uniqueOutput.length,
+      });
+      if (scanId) clearSearchBgScanCancel(scanId);
+      safe(() =>
+        setScanRunsByDate((prev) => ({
+          ...prev,
+          [dateKey]: {
+            ...baseRun,
+            status: "done",
+            finished_at: finishedAt,
+            rows_count: uniqueOutput.length,
+          },
+        }))
       );
       void logAlgoEvent({
         eventType: "scan_daily",
         payload: {
           matchCount: visibleFixtures.length,
-          retained: filteredOutput.length,
+          retained: uniqueOutput.length,
           totalEvaluations,
+          scanDate: dateKey,
+          scanTarget: target,
           timezone: timeZone,
           criteria: { hitMin: HIT_MIN, picksMin: V3_COVERAGE_MIN },
           autoSavedTeams: autoSavedTeams.size,
-          results: filteredOutput.map((row) => ({
+          results: uniqueOutput.map((row) => ({
             fixtureId: row.fixtureId,
             teamId: row.teamId,
             pick: row.pick,
@@ -1188,9 +1865,45 @@ export default function DailyScannerPanel() {
         },
       });
     } catch (err: any) {
-      setError(err?.message ?? "Erreur lors du scan.");
+      const isAbort = err?.name === "AbortError";
+      const message = isAbort ? "Recherche annulée." : err?.message ?? "Erreur lors du scan.";
+      updateBgState({ status: "error", progress: 100, message, rowsCount: null });
+      if (scanId) clearSearchBgScanCancel(scanId);
+      safe(() => setError(isAbort ? null : message));
+      safe(() => setScanInfoByDate((prev) => ({ ...prev, [dateKey]: message })));
+      const finishedAt = new Date().toISOString();
+      safe(() =>
+        setScanRunsByDate((prev) => ({
+          ...prev,
+          [dateKey]: {
+            ...baseRun,
+            status: "error",
+            finished_at: finishedAt,
+            error: message,
+          },
+        }))
+      );
+      try {
+        await supabaseBrowser
+          .from(SEARCH_RUNS_TABLE)
+          .update({
+            status: "error",
+            finished_at: finishedAt,
+            error: message,
+          })
+          .eq("scan_date", dateKey);
+      } catch {
+        // Ignore persist errors on failures
+      }
     } finally {
-      setLoading(false);
+      if (cancelWatcher) clearInterval(cancelWatcher);
+      if (scanId && activeScanIdRef.current === scanId) {
+        activeScanIdRef.current = null;
+      }
+      safe(() => setLoading(false));
+      if (oddsAbortControllerRef.current === abortController) {
+        oddsAbortControllerRef.current = null;
+      }
     }
   };
 
@@ -1198,7 +1911,11 @@ export default function DailyScannerPanel() {
     if (!value) return "--:--";
     const date = new Date(value);
     if (!Number.isFinite(date.getTime())) return "--:--";
-    return date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+    return date.toLocaleTimeString("fr-FR", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   };
 
   const formatDateLabel = (label: string) =>
@@ -1206,21 +1923,6 @@ export default function DailyScannerPanel() {
 
   return (
     <div className="w-full space-y-6">
-      {loading ? (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/70" />
-          <div className="relative w-full max-w-sm rounded-xl border border-white/10 bg-white/10 backdrop-blur-md shadow-lg p-4">
-            <div className="text-sm font-semibold text-white">Recherche en cours...</div>
-            <div className="mt-3 h-2 w-full rounded-full bg-white/10 overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-green-400 via-emerald-400 to-lime-400 transition-all"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-            <div className="mt-2 text-[11px] text-white/60">{progress}%</div>
-          </div>
-        </div>
-      ) : null}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div className="flex items-center justify-center gap-2 overflow-x-auto no-scrollbar md:justify-start">
           <button
@@ -1246,24 +1948,83 @@ export default function DailyScannerPanel() {
             Demain
           </button>
         </div>
-        <label className="flex items-center gap-2 text-xs text-white/70 self-center md:self-auto">
-          <input
-            type="checkbox"
-            checked={hideDiscouraged}
-            onChange={() => setHideDiscouraged((prev) => !prev)}
-            className="accent-red-500"
-          />
-          <span>Masquer les choix déconseillés</span>
-        </label>
-        <button
-          type="button"
-          onClick={runScan}
-          className="self-center md:self-auto px-3 py-1 rounded-lg text-sm bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white transition hover:from-green-400 hover:via-emerald-400 hover:to-lime-400"
-          disabled={loading}
-        >
-          {loading ? "Scan en cours..." : "Lancer une recherche"}
-        </button>
-      </div>
+	        <label className="flex items-center gap-2 text-xs text-white/70 self-center md:self-auto">
+	          <input
+	            type="checkbox"
+	            checked={hideDiscouraged}
+	            onChange={() => setHideDiscouraged((prev) => !prev)}
+	            className="accent-red-500"
+	          />
+	          <span>Masquer les choix déconseillés</span>
+	        </label>
+	        <div className="flex items-center gap-2 self-center md:self-auto">
+	          <button
+	            type="button"
+	            onClick={() => runScanForDay("today")}
+	            className="px-3 py-1 rounded-lg text-sm bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white transition hover:from-green-400 hover:via-emerald-400 hover:to-lime-400 disabled:opacity-40 disabled:cursor-not-allowed"
+	            disabled={
+	              loading ||
+	              isInResetWindow ||
+	              todayRun?.status === "done" ||
+	              (todayRun?.status === "running" && !isRunStale(todayRun))
+	            }
+	            title={
+	              isInResetWindow
+	                ? "Disponible à 00:01 (Toronto)."
+	                : todayRun?.status === "done"
+	                  ? "Déjà calculé et en cache."
+	                  : todayRun?.status === "running" && !isRunStale(todayRun)
+	                    ? `Scan déjà en cours (démarré à ${formatTime(todayRun.started_at)}).`
+	                    : "Calcule et met en cache les picks d'aujourd'hui."
+	            }
+	          >
+	            {todayRun?.status === "done"
+	              ? "Aujourd'hui (cache)"
+	              : todayRun?.status === "running" && !isRunStale(todayRun)
+	                ? "Aujourd'hui (en cours)"
+	                : todayRun?.status === "running"
+	                  ? "Relancer aujourd'hui"
+	                  : "Lancer aujourd'hui"}
+	          </button>
+	          <button
+	            type="button"
+	            onClick={() => runScanForDay("tomorrow")}
+	            className="px-3 py-1 rounded-lg text-sm bg-white/10 text-white/80 transition hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed"
+	            disabled={
+	              loading ||
+	              isInResetWindow ||
+	              tomorrowRun?.status === "done" ||
+	              (tomorrowRun?.status === "running" && !isRunStale(tomorrowRun))
+	            }
+	            title={
+	              isInResetWindow
+	                ? "Disponible à 00:01 (Toronto)."
+	                : tomorrowRun?.status === "done"
+	                  ? "Déjà calculé et en cache."
+	                  : tomorrowRun?.status === "running" && !isRunStale(tomorrowRun)
+	                    ? `Scan déjà en cours (démarré à ${formatTime(tomorrowRun.started_at)}).`
+	                    : "Calcule et met en cache les picks de demain."
+	            }
+	          >
+	            {tomorrowRun?.status === "done"
+	              ? "Demain (cache)"
+	              : tomorrowRun?.status === "running" && !isRunStale(tomorrowRun)
+	                ? "Demain (en cours)"
+	                : tomorrowRun?.status === "running"
+	                  ? "Relancer demain"
+	                  : "Lancer demain"}
+	          </button>
+            {loading ? (
+              <button
+                type="button"
+                onClick={cancelScan}
+                className="px-3 py-1 rounded-lg text-sm border border-red-400/40 bg-red-500/15 text-red-100 transition hover:bg-red-500/25"
+              >
+                Annuler
+              </button>
+            ) : null}
+	        </div>
+	      </div>
 
       {error ? (
         <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
@@ -1298,7 +2059,7 @@ export default function DailyScannerPanel() {
 
       {results.length === 0 && !loading ? (
         <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-sm text-white/60">
-          Lancer une recherche pour trouver les meilleurs opportunités
+          Lancez un scan pour aujourd&apos;hui ou demain afin de charger les picks (cache global).
         </div>
       ) : null}
 

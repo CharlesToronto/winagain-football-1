@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import PicksChart from "./components/PicksChart";
 
 type PickRow = {
@@ -58,12 +59,17 @@ const SINGLES_STAKE = 10;
 const COMBOS_STAKE = 50;
 const MIN_ODDS_FILTER = 1.18;
 const DISCOURAGED_COMPETITIONS = new Set([
-  "Israel|||Liga Leumit",
+  "Bulgaria|||First League",
+  "Belgium|||Jupiler Pro League",
+  "Greece|||Super League 1",
+  "Hungary|||NB I",
   "Scotland|||Football League - Highland League",
   "Scotland|||League One",
   "Belgium|||Challenger Pro League",
   "Hungary|||NB II",
   "Italy|||Serie C - Girone A",
+  "Romania|||Liga I",
+  "Serbia|||Super Liga",
 ]);
 
 type Combo = {
@@ -95,6 +101,7 @@ export default function AlgoHistoryView({
   const [excludedLines, setExcludedLines] = useState<string[]>([]);
   const [excludedPickCodes, setExcludedPickCodes] = useState<string[]>([]);
   const algoVersion = "v3";
+  const pathname = usePathname();
   const [criteria, setCriteria] = useState<"all" | "rose" | "yellow">("all");
   const [market, setMarket] = useState<
     "all" | "over_under" | "double_chance" | "1x2" | "btts" | "dnb" | "team_total"
@@ -117,11 +124,19 @@ export default function AlgoHistoryView({
   const refresh = () => setRefreshKey(Date.now());
 
   useEffect(() => {
+    const expectedPath = view === "combos" ? "/combos" : "/picks";
+    if (pathname !== expectedPath) return;
+    if (!lastFetchedAt) return;
+    if (Date.now() - lastFetchedAt < 1500) return;
+    refresh();
+  }, [pathname, view, lastFetchedAt]);
+
+  useEffect(() => {
     let active = true;
     setLoading(true);
     setError(null);
     const fetchJson = async (url: string) => {
-      const res = await fetch(url, { cache: "no-store" });
+      const res = await fetch(url, { cache: "no-store", headers: { "Cache-Control": "no-cache" } });
       const raw = await res.text();
       const cleaned = raw.replace(/^\uFEFF/, "").trim();
       let body: any = {};
@@ -201,16 +216,18 @@ export default function AlgoHistoryView({
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") triggerRefresh();
     };
-    const onPageShow = (event: PageTransitionEvent) => {
-      // When coming back via browser "Back" (bfcache), React state is restored
-      // and effects may not refetch. Force a refresh in that case.
-      if (event.persisted) triggerRefresh();
+    const onPageShow = () => {
+      // When coming back to this page (including after opening an /api/* URL),
+      // React state may be restored without refetching. Always refresh.
+      triggerRefresh();
     };
     window.addEventListener("focus", triggerRefresh);
+    window.addEventListener("popstate", triggerRefresh);
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("pageshow", onPageShow);
     return () => {
       window.removeEventListener("focus", triggerRefresh);
+      window.removeEventListener("popstate", triggerRefresh);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("pageshow", onPageShow);
     };
@@ -790,7 +807,10 @@ export default function AlgoHistoryView({
       string,
       { total: number; hits: number; oddsSum: number; oddsCount: number }
     >();
+    let resolvedTotal = 0;
     displayItems.forEach((row) => {
+      if (row.status !== "hit" && row.status !== "miss") return;
+      resolvedTotal += 1;
       const country = row.competition_country ?? "Inconnu";
       const name = row.competition_name ?? "Competition";
       const key = `${country}|||${name}`;
@@ -807,7 +827,7 @@ export default function AlgoHistoryView({
     const result = Array.from(totals.entries()).map(([key, data]) => {
       const [country, name] = key.split("|||");
       const hitRate = data.total ? (data.hits / data.total) * 100 : 0;
-      const share = displayItems.length ? (data.total / displayItems.length) * 100 : 0;
+      const share = resolvedTotal ? (data.total / resolvedTotal) * 100 : 0;
       const avgOdd = data.oddsCount ? data.oddsSum / data.oddsCount : 0;
       return { country, name, total: data.total, hits: data.hits, hitRate, share, avgOdd };
     });
@@ -876,12 +896,13 @@ export default function AlgoHistoryView({
   }, [showFiltersPanel]);
 
   const competitionSummary = useMemo(() => {
-    const totalPicks = displayItems.length;
-    const totalHits = displayItems.filter((row) => row.status === "hit").length;
+    const resolvedRows = displayItems.filter((row) => row.status === "hit" || row.status === "miss");
+    const totalPicks = resolvedRows.length;
+    const totalHits = resolvedRows.filter((row) => row.status === "hit").length;
     const hitRate = totalPicks ? (totalHits / totalPicks) * 100 : 0;
     const totalCompetitions = competitionStats.length;
     const avgPicks = totalCompetitions ? totalPicks / totalCompetitions : 0;
-    const odds = displayItems
+    const odds = resolvedRows
       .map((row) => Number(row.odd))
       .filter((val) => Number.isFinite(val) && val > 1);
     const avgOdd = odds.length ? odds.reduce((sum, val) => sum + val, 0) / odds.length : 0;

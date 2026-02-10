@@ -48,7 +48,17 @@ const TIMEZONE = "America/Toronto";
 const DAILY_ALGO_TABLE_V1 = "daily_algo_picks";
 const DAILY_ALGO_TABLE_V2 = "daily_algo_picks_v2";
 const DAILY_ALGO_TABLE_V3 = "daily_algo_picks_v3";
-const V2_BLACKLISTED_LEAGUE_IDS = new Set([206, 111, 80]);
+const V2_BLACKLISTED_LEAGUE_IDS = new Set([
+  206, // Turkey - Türkiye Kupası
+  111, // Wales - FAW Championship
+  80, // Germany - 3. Liga
+  286, // Serbia - Super Liga
+  197, // Greece - Super League 1
+  283, // Romania - Liga I
+  144, // Belgium - Jupiler Pro League
+  271, // Hungary - NB I
+  172, // Bulgaria - First League
+]);
 
 const V2_EV_MARGINS = {
   over_under: 0.02,
@@ -838,20 +848,27 @@ export async function GET(request: Request) {
     if (task === "all" || task === "resolve") {
       const pending: any[] = [];
       const pendingBatchSize = 1000;
-      let pendingOffset = 0;
+      let lastId: string | null = null;
       while (true) {
-        const { data, error: pendingError } = await supabase
+        let query = supabase
           .from(tableName)
           .select("id, fixture_id, pick")
           .or("status.eq.pending,status.is.null")
-          .range(pendingOffset, pendingOffset + pendingBatchSize - 1);
+          .order("id", { ascending: true })
+          .limit(pendingBatchSize);
+        if (lastId) {
+          query = query.gt("id", lastId);
+        }
+        const { data, error: pendingError } = await query;
         if (pendingError) {
           return NextResponse.json({ error: pendingError.message }, { status: 500 });
         }
         const rows = data ?? [];
         pending.push(...rows);
-        if (rows.length < pendingBatchSize) break;
-        pendingOffset += pendingBatchSize;
+        if (!rows.length) break;
+        const newLastId = rows[rows.length - 1]?.id;
+        if (!newLastId || newLastId === lastId) break;
+        lastId = String(newLastId);
       }
 
       const pendingCount = pending.length;
@@ -859,6 +876,20 @@ export async function GET(request: Request) {
       let missingScores = 0;
       let unknownPick = 0;
       const unknownPickMap = new Map<string, number>();
+      let updateErrors = 0;
+      const updateErrorSamples: Array<{ id: string; fixtureId: number; error: string }> = [];
+      const unsupportedUpdateColumns = new Set<string>();
+
+      const extractMissingColumn = (value: any) => {
+        const message = String(value?.message ?? "");
+        const match = message.match(/Could not find the '([^']+)' column/i);
+        if (match) return match[1];
+        const match2 = message.match(/column ([a-zA-Z0-9_]+) does not exist/i);
+        if (match2) return match2[1];
+        const match3 = message.match(/column [a-zA-Z0-9_]+\\.([a-zA-Z0-9_]+) does not exist/i);
+        if (match3) return match3[1];
+        return null;
+      };
 
       if (pendingCount) {
         const fixtureIds = Array.from(
@@ -904,33 +935,96 @@ export async function GET(request: Request) {
             unknownPickMap.set(key, (unknownPickMap.get(key) ?? 0) + 1);
             continue;
           }
-          await supabase
-            .from(tableName)
-            .update({
-              status: hit ? "hit" : "miss",
-              hit,
-              goals_home: fixture.goals_home,
-              goals_away: fixture.goals_away,
-              resolved_at: new Date().toISOString(),
-            })
-            .eq("id", row.id);
-          resolved += 1;
+
+          const baseUpdate: Record<string, any> = {
+            status: hit ? "hit" : "miss",
+            hit,
+            goals_home: fixture.goals_home,
+            goals_away: fixture.goals_away,
+            resolved_at: new Date().toISOString(),
+          };
+
+          const buildUpdate = () => {
+            const payload = { ...baseUpdate };
+            unsupportedUpdateColumns.forEach((col) => {
+              delete payload[col];
+            });
+            return payload;
+          };
+
+          let payload = buildUpdate();
+          let updatedOk = false;
+          let updateFailureMessage: string | null = null;
+          for (let attempt = 0; attempt < 6; attempt += 1) {
+            if (!Object.keys(payload).length) break;
+            const { data: updated, error: updateError } = await supabase
+              .from(tableName)
+              .update(payload)
+              .eq("id", row.id)
+              .select("id");
+
+            if (!updateError) {
+              if (Array.isArray(updated) && updated.length > 0) {
+                updatedOk = true;
+                break;
+              }
+              updateFailureMessage = "Update returned 0 rows (possible RLS or missing row).";
+              break;
+            }
+
+            const missing = extractMissingColumn(updateError);
+            if (missing && !unsupportedUpdateColumns.has(missing)) {
+              unsupportedUpdateColumns.add(missing);
+              payload = buildUpdate();
+              continue;
+            }
+
+            updateFailureMessage = String(updateError.message ?? updateError);
+            break;
+          }
+
+          if (updatedOk) {
+            resolved += 1;
+          } else {
+            updateErrors += 1;
+            if (updateErrorSamples.length < 10) {
+              updateErrorSamples.push({
+                id: String(row.id ?? ""),
+                fixtureId: Number(row.fixture_id ?? 0),
+                error: updateFailureMessage || "Update failed (unknown reason).",
+              });
+            }
+          }
         }
         summary.resolved = resolved;
         summary.pending = pendingCount;
         summary.missingFixture = missingFixture;
         summary.missingScores = missingScores;
         summary.unknownPick = unknownPick;
+        summary.updateErrors = updateErrors;
+        summary.updateErrorSamples = updateErrorSamples;
+        summary.resolveUnsupportedColumns = Array.from(unsupportedUpdateColumns.values());
         summary.unknownPickSample = Array.from(unknownPickMap.entries())
           .sort((a, b) => b[1] - a[1])
           .slice(0, 20)
           .map(([pick, count]) => ({ pick, count }));
+
+        const { count: pendingAfter, error: pendingAfterError } = await supabase
+          .from(tableName)
+          .select("id", { count: "exact", head: true })
+          .or("status.eq.pending,status.is.null");
+        if (!pendingAfterError) {
+          summary.pendingAfter = pendingAfter ?? null;
+        }
       } else {
         summary.resolved = 0;
         summary.pending = 0;
         summary.missingFixture = 0;
         summary.missingScores = 0;
         summary.unknownPick = 0;
+        summary.updateErrors = 0;
+        summary.updateErrorSamples = [];
+        summary.resolveUnsupportedColumns = [];
         summary.unknownPickSample = [];
       }
     }
@@ -1208,6 +1302,7 @@ export async function GET(request: Request) {
 
       let createdCount = 0;
       let updatedCount = 0;
+      let rowsToUpsert = rows;
       if (rows.length) {
         const { data: existingRows, error: existingError } = await supabase
           .from(tableName)
@@ -1229,12 +1324,21 @@ export async function GET(request: Request) {
             createdCount += 1;
           }
         }
+
+        rowsToUpsert = rows.map((row) => {
+          const key = `${row.fixture_id ?? ""}|${row.team_id ?? ""}|${row.pick ?? ""}`;
+          if (!existingKeys.has(key)) return row;
+          const next: any = { ...row };
+          // Avoid overwriting resolved statuses when replaying a snapshot for the same date.
+          delete next.status;
+          return next;
+        });
       }
 
-      if (rows.length) {
+      if (rowsToUpsert.length) {
         const { error: upsertError } = await supabase
           .from(tableName)
-          .upsert(rows, { onConflict: "snapshot_date,fixture_id,team_id,pick" });
+          .upsert(rowsToUpsert, { onConflict: "snapshot_date,fixture_id,team_id,pick" });
         if (upsertError) {
           return NextResponse.json({ error: upsertError.message }, { status: 500 });
         }
@@ -1622,7 +1726,9 @@ export async function GET(request: Request) {
       summary.to = toKey;
     }
 
-    return NextResponse.json({ ok: true, ...summary });
+    const res = NextResponse.json({ ok: true, ...summary });
+    res.headers.set("Cache-Control", "no-store, max-age=0");
+    return res;
   } catch (err: any) {
     return NextResponse.json(
       { error: true, details: err?.message ?? "Daily algo job error" },

@@ -29,6 +29,13 @@ export default function AdminDataPage() {
   const [htTypingIndex, setHtTypingIndex] = useState(0);
   const cacheReady = useRef(false);
 
+  const sqlTotalPicksV3 = `select count(*) as total_picks_v3
+from public.daily_algo_picks_v3;`;
+
+  const sqlResolvedPicksV3 = `select count(*) as resolved_picks_v3
+from public.daily_algo_picks_v3
+where status in ('hit','miss');`;
+
   const CACHE_KEY = "admin-data-cache-v1";
   const CACHE_TTL_MS = 10 * 24 * 60 * 60 * 1000; // 10 jours
 
@@ -343,6 +350,51 @@ export default function AdminDataPage() {
             >
               {picksUrl}
             </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="mb-6 rounded-lg border border-white/10 bg-white/5 p-4">
+        <div className="flex items-start justify-between gap-3 mb-2">
+          <div>
+            <p className="text-sm font-semibold">SQL (Algo v3)</p>
+            <p className="text-xs text-white/70">
+              Requêtes utiles pour vérifier le volume de picks et le nombre de picks résolus.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid gap-3">
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <p className="text-xs font-semibold text-white/80">Nombre total de picks (v3)</p>
+              <button
+                type="button"
+                onClick={() => copyToClipboard(sqlTotalPicksV3)}
+                className="text-xs px-2 py-1 rounded-md border border-white/15 bg-white/10 hover:bg-white/15"
+              >
+                Copier
+              </button>
+            </div>
+            <pre className="text-xs text-white/80 whitespace-pre-wrap break-words select-text font-mono">
+              {sqlTotalPicksV3}
+            </pre>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <p className="text-xs font-semibold text-white/80">Nombre de picks résolus (v3)</p>
+              <button
+                type="button"
+                onClick={() => copyToClipboard(sqlResolvedPicksV3)}
+                className="text-xs px-2 py-1 rounded-md border border-white/15 bg-white/10 hover:bg-white/15"
+              >
+                Copier
+              </button>
+            </div>
+            <pre className="text-xs text-white/80 whitespace-pre-wrap break-words select-text font-mono">
+              {sqlResolvedPicksV3}
+            </pre>
           </div>
         </div>
       </div>

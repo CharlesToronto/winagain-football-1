@@ -3,10 +3,24 @@
 import Link from "next/link";
 import { ReactNode, useEffect, useState } from "react";
 import { FAVORITES_STORAGE_KEY, type FavoriteTeam } from "@/lib/favorites";
+import SearchAlgoScanBanner from "@/app/components/search/SearchAlgoScanBanner";
+import AppBroadcastBanner from "@/app/components/layout/AppBroadcastBanner";
+import AppAnalyticsTracker from "@/app/components/analytics/AppAnalyticsTracker";
+import { supabaseBrowser } from "@/lib/supabase/client";
 
 type Props = {
   children: ReactNode;
 };
+
+const DEFAULT_TOPBAR_MESSAGE = "We have update Charly IA 2.4";
+const BROADCAST_UPDATE_EVENT = "app-broadcast-updated";
+
+function isMissingTable(error: any) {
+  if (!error) return false;
+  if (error.code === "42P01") return true;
+  const message = String(error.message ?? "").toLowerCase();
+  return message.includes("does not exist") && message.includes("relation");
+}
 
 export default function AppShell({ children }: Props) {
   const [open, setOpen] = useState(false);
@@ -17,6 +31,7 @@ export default function AppShell({ children }: Props) {
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [favorites, setFavorites] = useState<FavoriteTeam[]>([]);
+  const [topbarMessage, setTopbarMessage] = useState<string>(DEFAULT_TOPBAR_MESSAGE);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -55,6 +70,42 @@ export default function AppShell({ children }: Props) {
     return () => {
       window.removeEventListener("favorites-updated", handleFavoritesUpdated);
       window.removeEventListener("storage", handleStorage);
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const loadTopbar = async () => {
+      const nowIso = new Date().toISOString();
+      const { data, error } = await supabaseBrowser
+        .from("app_broadcasts")
+        .select("message,starts_at,ends_at")
+        .eq("channel", "topbar")
+        .lte("starts_at", nowIso)
+        .or(`ends_at.is.null,ends_at.gt.${nowIso}`)
+        .order("starts_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!alive) return;
+
+      if (error) {
+        if (!isMissingTable(error)) {
+          console.warn("[broadcast] Topbar load error:", error);
+        }
+        setTopbarMessage(DEFAULT_TOPBAR_MESSAGE);
+        return;
+      }
+      const message = String(data?.message ?? "").trim();
+      setTopbarMessage(message || DEFAULT_TOPBAR_MESSAGE);
+    };
+
+    void loadTopbar();
+    const onUpdated = () => void loadTopbar();
+    window.addEventListener(BROADCAST_UPDATE_EVENT, onUpdated);
+    return () => {
+      alive = false;
+      window.removeEventListener(BROADCAST_UPDATE_EVENT, onUpdated);
     };
   }, []);
 
@@ -117,6 +168,7 @@ export default function AppShell({ children }: Props) {
 
   return (
     <>
+      <AppAnalyticsTracker />
       <div className="fixed top-0 left-0 right-0 z-50 border-b border-white/10 bg-black">
         <div className="h-14 max-w-[1400px] mx-auto px-3 sm:px-6 flex items-center gap-2">
           <div className="hidden md:flex items-center gap-2 min-w-[180px]">
@@ -149,11 +201,11 @@ export default function AppShell({ children }: Props) {
             )}
           </div>
           <div className="flex-1 min-w-0 md:hidden text-left text-[11px] sm:text-xs text-white/80 whitespace-nowrap leading-tight overflow-x-auto no-scrollbar">
-            We have update Charly IA 2.4
+            {topbarMessage}
           </div>
           <div className="ml-auto flex items-center gap-3">
             <div className="hidden md:block text-left text-sm text-white/80 whitespace-nowrap">
-              We have update Charly IA 2.4
+              {topbarMessage}
             </div>
             <button
               type="button"
@@ -200,6 +252,8 @@ export default function AppShell({ children }: Props) {
             open ? "md:pr-64 lg:pr-72" : "md:pr-0"
           }`}
         >
+          <AppBroadcastBanner />
+          <SearchAlgoScanBanner />
           {children}
         </main>
 
