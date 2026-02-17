@@ -87,16 +87,21 @@ export default function SearchAlgoScanBanner() {
       ? "from-sky-400 via-indigo-400 to-fuchsia-400"
       : "from-red-400 via-orange-400 to-amber-400";
 
-  const subtitle = computed.isStale
-    ? "Le scan semble interrompu. Tu peux relancer."
-    : state.message || (isRunning ? "Scan en cours..." : null);
+  const isAnalysisMessage =
+    typeof state.message === "string" && /match\(s\) analysé\(s\)/i.test(state.message);
+  const subtitle =
+    !isAnalysisMessage && state.message
+      ? state.message
+      : isRunning
+        ? "Scan en cours..."
+        : null;
 
   const canCancel = isRunning && !computed.isStale;
 
   return (
     <div className="sticky top-14 z-40 mb-4">
       <div className="rounded-xl border border-white/10 bg-black/40 backdrop-blur-xl px-4 py-3 shadow-lg">
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span
@@ -112,6 +117,14 @@ export default function SearchAlgoScanBanner() {
               <span className="tabular-nums">Temps {formatDuration(computed.seconds)}</span>
               <span className="text-white/30">•</span>
               <span className="tabular-nums">{progress.toFixed(0)}%</span>
+              {state.analysisTotal != null ? (
+                <>
+                  <span className="text-white/30">•</span>
+                  <span className="tabular-nums">
+                    {state.analysisProcessed ?? 0}/{state.analysisTotal} matchs analysés
+                  </span>
+                </>
+              ) : null}
               {state.rowsCount != null && !isRunning ? (
                 <>
                   <span className="text-white/30">•</span>
@@ -134,12 +147,12 @@ export default function SearchAlgoScanBanner() {
             </div>
           </div>
 
-          <div className="flex shrink-0 flex-col gap-2">
+          <div className="flex shrink-0 flex-wrap justify-end gap-2 sm:flex-col sm:items-stretch">
             {canCancel ? (
               <button
                 type="button"
                 onClick={() => requestSearchBgScanCancel(state.scanId)}
-                className="rounded-lg border border-red-400/40 bg-red-500/15 px-3 py-1.5 text-xs font-semibold text-red-100 transition hover:bg-red-500/25"
+                className="rounded-lg border border-red-400/40 bg-red-500/15 px-3 py-1.5 text-xs font-semibold text-red-100 transition hover:bg-red-500/25 text-center"
               >
                 Annuler
               </button>
@@ -159,7 +172,7 @@ export default function SearchAlgoScanBanner() {
                   clearSearchBgScanCancel(state.scanId);
                   writeSearchBgScanState(null);
                 }}
-                className="rounded-lg border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:bg-white/15"
+                className="rounded-lg border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white/80 transition hover:bg-white/15 text-center"
               >
                 Fermer
               </button>
@@ -172,7 +185,7 @@ export default function SearchAlgoScanBanner() {
                   clearSearchBgScanCancel(state.scanId);
                   writeSearchBgScanState(null);
                 }}
-                className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-100 transition hover:bg-amber-500/15"
+                className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-100 transition hover:bg-amber-500/15 text-center"
               >
                 Reset
               </button>

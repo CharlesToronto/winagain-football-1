@@ -23,8 +23,10 @@ import {
 import { logAlgoEvent } from "@/lib/adapters/algoEvents";
 import {
   clearSearchBgScanCancel,
+  readSearchBgScanState,
   isSearchBgScanCancelRequested,
   requestSearchBgScanCancel,
+  SEARCH_BG_SCAN_EVENT,
   writeSearchBgScanState,
   type SearchBgScanState,
 } from "@/lib/searchAlgoScanBackground";
@@ -54,11 +56,18 @@ const SEARCH_RUNS_TABLE = "search_algo_scan_runs";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SCAN_RESET_MINUTES = 1;
 const STALE_RUN_MINUTES = 20;
+const BG_SCAN_HEARTBEAT_MS = 15_000;
+const BG_SCAN_STALE_HEARTBEAT_MS = 120_000;
+const NON_CRITICAL_QUERY_TIMEOUT_MS = 10_000;
+const TEAM_SETTINGS_CHUNK_SIZE = 120;
 const SEARCH_SESSION_CACHE_PREFIX = "winagain:search-algo:cache:";
-const SETTINGS_STORAGE_PREFIX = "winagain:algo-settings:team:";
+const SETTINGS_RECALIBRATION_INTERVAL_MS = 7 * DAY_MS;
+const SETTINGS_RECALIBRATION_RETRY_MS = DAY_MS;
+const SETTINGS_PROMOTION_MIN_HIT_DELTA = 0.02;
+const SETTINGS_PROMOTION_MIN_ROI_DELTA = 0.015;
 const FAVORITE_COMPETITIONS_STORAGE_KEY = "winagain:fav_competition_ids";
 const ANON_USER_ID = "00000000-0000-0000-0000-000000000000";
-const TEAM_EVENT_NAME = "algo-settings-team-updated";
+const SCAN_LOG_PREFIX = "[SearchAlgoScan]";
 
 type FixtureLite = {
   id: number;
@@ -73,6 +82,7 @@ type FixtureLite = {
 type TeamSettingsRow = {
   team_id: number;
   settings: AlgoSettings;
+  updated_at: string | null;
 };
 
 type TeamEval = {
@@ -253,6 +263,14 @@ function createRateLimiter(maxConcurrent: number, minIntervalMs: number) {
 const ODDS_MIN_INTERVAL_MS = 250; // ~240 req/min to stay under 300/min
 const oddsLimiter = createRateLimiter(1, ODDS_MIN_INTERVAL_MS);
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const withTimeout = <T,>(promise: PromiseLike<T>, timeoutMs: number) =>
+  new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Timeout")), timeoutMs);
+    Promise.resolve(promise)
+      .then((value) => resolve(value))
+      .catch((error) => reject(error))
+      .finally(() => clearTimeout(timer));
+  });
 
 async function fetchFixtureOdds(
   fixtureId: number,
@@ -502,32 +520,50 @@ function buildAllSettings(lineSets: MarketLine[][], weightModes: Array<"soft" | 
   return combos;
 }
 
-function loadLocalTeamSettings(teamId: number) {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(`${SETTINGS_STORAGE_PREFIX}${teamId}`);
-    if (!raw) return null;
-    return normalizeAlgoSettings(JSON.parse(raw));
-  } catch {
-    return null;
-  }
+function isEvalMeetsCriteria(evalResult: TeamEval) {
+  return (
+    evalResult.stats.hitRate >= HIT_MIN &&
+    evalResult.stats.coverage >= V3_COVERAGE_MIN &&
+    evalResult.stats.picks >= MIN_TOTAL_PICKS
+  );
 }
 
-function persistLocalTeamSettings(teamId: number, settings: AlgoSettings) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(
-      `${SETTINGS_STORAGE_PREFIX}${teamId}`,
-      JSON.stringify(settings)
-    );
-    window.dispatchEvent(
-      new CustomEvent(TEAM_EVENT_NAME, {
-        detail: { teamId, settings },
-      })
-    );
-  } catch {
-    // Ignore storage errors
+function shouldPromoteSettings(current: TeamEval, candidate: TeamEval) {
+  const currentMeets = isEvalMeetsCriteria(current);
+  const candidateMeets = isEvalMeetsCriteria(candidate);
+  if (!candidateMeets) return false;
+  if (!currentMeets) return true;
+
+  const hitDelta = candidate.stats.hitRate - current.stats.hitRate;
+  const roiDelta = candidate.stats.roiScore - current.stats.roiScore;
+  const picksDelta = candidate.stats.picks - current.stats.picks;
+  if (hitDelta >= SETTINGS_PROMOTION_MIN_HIT_DELTA) return true;
+  if (roiDelta >= SETTINGS_PROMOTION_MIN_ROI_DELTA) return true;
+  if (hitDelta >= 0.01 && roiDelta >= 0 && picksDelta >= 5) return true;
+  return false;
+}
+
+function parseIsoToMs(value: string | null | undefined) {
+  if (!value) return null;
+  const ms = new Date(value).getTime();
+  if (!Number.isFinite(ms)) return null;
+  return ms;
+}
+
+function isSettingsRecalibrationDue(lastCheckedAt: string | null | undefined, meetsCriteria: boolean | null) {
+  if (meetsCriteria == null) return true;
+  const lastCheckedMs = parseIsoToMs(lastCheckedAt);
+  if (lastCheckedMs == null) return true;
+  const delayMs = meetsCriteria ? SETTINGS_RECALIBRATION_INTERVAL_MS : SETTINGS_RECALIBRATION_RETRY_MS;
+  return Date.now() - lastCheckedMs >= delayMs;
+}
+
+function toErrorMessage(error: unknown) {
+  if (error && typeof error === "object" && "message" in error) {
+    const msg = (error as { message?: unknown }).message;
+    if (typeof msg === "string" && msg.length) return msg;
   }
+  return String(error);
 }
 
 export default function DailyScannerPanel() {
@@ -537,7 +573,10 @@ export default function DailyScannerPanel() {
   const [scanInfoByDate, setScanInfoByDate] = useState<Record<string, string | null>>({});
   const [scanRunsByDate, setScanRunsByDate] = useState<Record<string, ScanRunRow | null>>({});
   const [dayTab, setDayTab] = useState<"today" | "tomorrow">("today");
+  const [runningTarget, setRunningTarget] = useState<"today" | "tomorrow" | null>(null);
   const [hideDiscouraged, setHideDiscouraged] = useState(true);
+  const [bgScanState, setBgScanState] = useState<SearchBgScanState | null>(null);
+  const [clockMs, setClockMs] = useState(() => Date.now());
   const [favoriteCompetitionIds, setFavoriteCompetitionIds] = useState<Set<number>>(
     () => new Set()
   );
@@ -571,6 +610,23 @@ export default function DailyScannerPanel() {
     } catch {
       // Ignore storage errors
     }
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => setBgScanState(readSearchBgScanState());
+    refresh();
+    const onStorage = (event: StorageEvent) => {
+      if (!event.key) return;
+      if (event.key.includes("winagain:search-algo:bg-scan")) refresh();
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener(SEARCH_BG_SCAN_EVENT, refresh);
+    const t = setInterval(() => setClockMs(Date.now()), 10_000);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener(SEARCH_BG_SCAN_EVENT, refresh);
+      clearInterval(t);
+    };
   }, []);
 
   const toggleFavoriteCompetitionId = (id: number) => {
@@ -694,12 +750,57 @@ export default function DailyScannerPanel() {
   const lastScanInfo = scanInfoByDate[activeDateKey] ?? null;
   const todayRun = scanRunsByDate[todayKey] ?? null;
   const tomorrowRun = scanRunsByDate[tomorrowKey] ?? null;
+  const hasFreshBgHeartbeatForDate = (
+    dateKey: string,
+    state: SearchBgScanState | null = bgScanState,
+    nowMsOverride: number = clockMs
+  ) => {
+    if (!state || state.status !== "running" || state.scanDate !== dateKey) return false;
+    const updatedAtMs = new Date(state.updatedAt).getTime();
+    if (!Number.isFinite(updatedAtMs)) return false;
+    return nowMsOverride - updatedAtMs <= BG_SCAN_STALE_HEARTBEAT_MS;
+  };
+  const cacheCountByDate = useMemo(() => {
+    const counts: Record<string, number> = {};
+    results.forEach((row) => {
+      if (!row.dateUtc) return;
+      const date = new Date(row.dateUtc);
+      if (!Number.isFinite(date.getTime())) return;
+      const key = toDateKey(date);
+      counts[key] = (counts[key] ?? 0) + 1;
+    });
+    return counts;
+  }, [results]);
   const isRunStale = (run: ScanRunRow | null) => {
     if (!run?.started_at) return true;
     const date = new Date(run.started_at);
     if (!Number.isFinite(date.getTime())) return true;
     return Date.now() - date.getTime() > STALE_RUN_MINUTES * 60_000;
   };
+  const todayCachedCount = cacheCountByDate[todayKey] ?? 0;
+  const tomorrowCachedCount = cacheCountByDate[tomorrowKey] ?? 0;
+  const todayHasCache = todayCachedCount > 0;
+  const tomorrowHasCache = tomorrowCachedCount > 0;
+  const todayIsRunning = Boolean(
+    todayRun?.status === "running" &&
+      !isRunStale(todayRun) &&
+      (hasFreshBgHeartbeatForDate(todayKey) || runningTarget === "today")
+  );
+  const tomorrowIsRunning = Boolean(
+    tomorrowRun?.status === "running" &&
+      !isRunStale(tomorrowRun) &&
+      (hasFreshBgHeartbeatForDate(tomorrowKey) || runningTarget === "tomorrow")
+  );
+  const todayDoneWithCache = todayRun?.status === "done" && todayHasCache;
+  const tomorrowDoneWithCache = tomorrowRun?.status === "done" && tomorrowHasCache;
+  const activeRawResults = useMemo(() => {
+    return results.filter((row) => {
+      if (!row.dateUtc) return false;
+      const date = new Date(row.dateUtc);
+      if (!Number.isFinite(date.getTime())) return false;
+      return toDateKey(date) === activeDateKey;
+    });
+  }, [results, activeDateKey]);
 
   const isInResetWindow = (() => {
     const parts = getTzParts(new Date());
@@ -1179,6 +1280,29 @@ export default function DailyScannerPanel() {
     const dateKey = range.dateKey;
     const start = range.start;
     const end = range.end;
+    const logContext = `${SCAN_LOG_PREFIX}[${target}:${dateKey}]`;
+    const logInfo = (message: string, details?: Record<string, unknown>) => {
+      if (details) {
+        console.info(`${logContext} ${message}`, details);
+      } else {
+        console.info(`${logContext} ${message}`);
+      }
+    };
+    const logWarn = (message: string, details?: Record<string, unknown>) => {
+      if (details) {
+        console.warn(`${logContext} ${message}`, details);
+      } else {
+        console.warn(`${logContext} ${message}`);
+      }
+    };
+    const logError = (message: string, details?: Record<string, unknown>) => {
+      if (details) {
+        console.error(`${logContext} ${message}`, details);
+      } else {
+        console.error(`${logContext} ${message}`);
+      }
+    };
+    const runStartMs = Date.now();
 
     const safe = (fn: () => void) => {
       if (!mountedRef.current) return;
@@ -1187,6 +1311,11 @@ export default function DailyScannerPanel() {
 
     safe(() => setDayTab(target));
     safe(() => setError(null));
+    logInfo("Scan requested", {
+      dateKey,
+      startUtc: start.toISOString(),
+      endUtc: end.toISOString(),
+    });
 
     if (isInResetWindow) {
       safe(() =>
@@ -1195,6 +1324,7 @@ export default function DailyScannerPanel() {
           [dateKey]: "Indisponible entre 00:00 et 00:01 (Toronto).",
         }))
       );
+      logWarn("Blocked by reset window");
       return;
     }
 
@@ -1214,6 +1344,7 @@ export default function DailyScannerPanel() {
       rows_count: null,
     };
 
+    safe(() => setRunningTarget(target));
     safe(() => setLoading(true));
     cacheRef.current.clear();
     cancelRequestedRef.current = false;
@@ -1224,6 +1355,7 @@ export default function DailyScannerPanel() {
     let scanId: string | null = null;
     let bgState: SearchBgScanState | null = null;
     let cancelWatcher: ReturnType<typeof setInterval> | null = null;
+    let heartbeatWatcher: ReturnType<typeof setInterval> | null = null;
 
     const updateBgState = (patch: Partial<SearchBgScanState>) => {
       if (!bgState) return;
@@ -1260,6 +1392,7 @@ export default function DailyScannerPanel() {
       }
     };
     try {
+      logInfo("Acquiring scan lock row");
       const { error: insertError } = await supabaseBrowser.from(SEARCH_RUNS_TABLE).insert({
         scan_date: dateKey,
         status: "running",
@@ -1267,16 +1400,31 @@ export default function DailyScannerPanel() {
       });
 
       if (insertError) {
+        logWarn("Insert lock failed", {
+          code: insertError.code ?? null,
+          message: insertError.message ?? null,
+        });
         if (insertError.code !== "23505") {
           throw new Error(insertError.message);
         }
 
         const existing = await refreshRunForDateKey(dateKey);
+        logInfo("Existing scan row found", {
+          status: existing?.status ?? null,
+          startedAt: existing?.started_at ?? null,
+          finishedAt: existing?.finished_at ?? null,
+        });
         if (existing?.status === "done") {
-          await refreshCacheForDateKey(dateKey);
-          return;
+          const cached = await refreshCacheForDateKey(dateKey);
+          logInfo("Loaded existing done cache", { rows: cached.length });
+          logInfo("Manual relaunch requested; continuing with a fresh run");
         }
-        if (existing?.status === "running" && !isStaleRun(existing)) {
+        const existingHasFreshBgHeartbeat =
+          existing?.status === "running"
+            ? hasFreshBgHeartbeatForDate(dateKey, readSearchBgScanState(), Date.now())
+            : false;
+        if (existing?.status === "running" && !isStaleRun(existing) && existingHasFreshBgHeartbeat) {
+          logInfo("Abort new run because another run is active");
           safe(() =>
             setScanInfoByDate((prev) => ({
               ...prev,
@@ -1300,9 +1448,11 @@ export default function DailyScannerPanel() {
         if (updateError) {
           throw new Error(updateError.message);
         }
+        logInfo("Reclaimed stale scan row");
       }
 
       scanId = `${dateKey}:${startedAt}:${Math.random().toString(16).slice(2)}`;
+      logInfo("Scan lock acquired", { scanId });
       activeScanIdRef.current = scanId;
       bgState = {
         scanId,
@@ -1314,8 +1464,13 @@ export default function DailyScannerPanel() {
         progress: 5,
         message: "Scan en cours...",
         rowsCount: null,
+        analysisProcessed: null,
+        analysisTotal: null,
       };
       writeSearchBgScanState(bgState);
+      heartbeatWatcher = setInterval(() => {
+        updateBgState({});
+      }, BG_SCAN_HEARTBEAT_MS);
       cancelWatcher = setInterval(() => {
         if (!scanId) return;
         if (isSearchBgScanCancelRequested(scanId)) {
@@ -1352,6 +1507,7 @@ export default function DailyScannerPanel() {
       }
 
       const fixtures = (fixtureRows ?? []) as FixtureLite[];
+      logInfo("Fixtures loaded", { fixtures: fixtures.length });
       if (!fixtures.length) {
         const finishedAt = new Date().toISOString();
         updateBgState({
@@ -1359,6 +1515,8 @@ export default function DailyScannerPanel() {
           progress: 100,
           message: "Aucune rencontre sur cette période.",
           rowsCount: 0,
+          analysisProcessed: 0,
+          analysisTotal: 0,
         });
         safe(() =>
           setScanInfoByDate((prev) => ({
@@ -1389,6 +1547,7 @@ export default function DailyScannerPanel() {
           })
           .eq("scan_date", dateKey);
         if (scanId) clearSearchBgScanCancel(scanId);
+        logInfo("No fixture for selected day, finished");
         return;
       }
 
@@ -1398,19 +1557,14 @@ export default function DailyScannerPanel() {
       });
       throwIfCancelled();
 
-      const teamIds = Array.from(
-        new Set(
-          fixtures
-            .flatMap((fixture) => [fixture.home?.id, fixture.away?.id])
-            .filter((id): id is number => Number.isFinite(id))
-            .map((id) => Number(id))
-        )
-      );
-
       const {
         data: { user },
       } = await supabaseBrowser.auth.getUser();
       const userId = user?.id ?? ANON_USER_ID;
+      logInfo("Resolved user context", {
+        userId,
+        isAnonymous: !user?.id,
+      });
 
       const leagueIds = Array.from(
         new Set(
@@ -1460,18 +1614,25 @@ export default function DailyScannerPanel() {
           leagueFixturesMap.set(leagueId, normalized);
         })
       );
-      updateBgState({ progress: 35, message: "Historique chargé." });
+      logInfo("League history loaded", {
+        leagues: leagueIds.length,
+      });
+      updateBgState({ progress: 35, message: "Historique chargé. Préparation..." });
       throwIfCancelled();
 
       const competitionNameMap = new Map<number, string>();
       const competitionCountryMap = new Map<number, string>();
       const competitionLogoMap = new Map<number, string>();
       if (leagueIds.length) {
+        updateBgState({ progress: 36, message: "Chargement des compétitions..." });
         try {
-          const { data: competitions } = await supabaseBrowser
-            .from("competitions")
-            .select("id,name,country,logo")
-            .in("id", leagueIds);
+          const { data: competitions } = await withTimeout<any>(
+            supabaseBrowser
+              .from("competitions")
+              .select("id,name,country,logo")
+              .in("id", leagueIds),
+            NON_CRITICAL_QUERY_TIMEOUT_MS
+          );
           (competitions ?? []).forEach((row: any) => {
             const id = Number(row?.id);
             if (!Number.isFinite(id)) return;
@@ -1480,14 +1641,26 @@ export default function DailyScannerPanel() {
             if (row?.country) competitionCountryMap.set(id, String(row.country));
             if (row?.logo) competitionLogoMap.set(id, String(row.logo));
           });
+          logInfo("Competition metadata loaded", {
+            requested: leagueIds.length,
+            loaded: competitionNameMap.size,
+          });
         } catch {
-          // Ignore API errors and fallback to generic labels
+          // Ignore non-critical API errors/timeouts and fallback to generic labels
+          logWarn("Competition metadata fetch failed, fallback labels will be used");
         }
       }
 
-      const allowedCompetitionIds = new Set<number>(Array.from(competitionNameMap.keys()));
       const visibleFixtures = fixtures.filter((fixture) =>
-        allowedCompetitionIds.has(Number(fixture.competition_id ?? 0))
+        Number.isFinite(fixture.competition_id)
+      );
+      const teamIds = Array.from(
+        new Set(
+          visibleFixtures
+            .flatMap((fixture) => [fixture.home?.id, fixture.away?.id])
+            .filter((id): id is number => Number.isFinite(id))
+            .map((id) => Number(id))
+        )
       );
 
       const totalEvaluations = visibleFixtures.reduce((sum, fixture) => {
@@ -1495,35 +1668,67 @@ export default function DailyScannerPanel() {
         const awayValid = Number.isFinite(fixture.away?.id) ? 1 : 0;
         return sum + homeValid + awayValid;
       }, 0);
-
-      const localSettings = new Map<number, AlgoSettings>();
-      teamIds.forEach((teamId) => {
-        const local = loadLocalTeamSettings(teamId);
-        if (local) localSettings.set(teamId, local);
+      logInfo("Prepared scan entities", {
+        visibleFixtures: visibleFixtures.length,
+        teams: teamIds.length,
+        evaluations: totalEvaluations,
       });
 
       let remoteSettings: TeamSettingsRow[] = [];
       if (teamIds.length) {
-        const { data: settingsRows } = await supabaseBrowser
-          .from("team_algo_settings")
-          .select("team_id, settings")
-          .eq("user_id", userId)
-          .in("team_id", teamIds);
-        remoteSettings =
-          (settingsRows ?? []).map((row: any) => ({
-            team_id: Number(row.team_id),
-            settings: normalizeAlgoSettings(row.settings),
-          })) ?? [];
+        updateBgState({ progress: 37, message: "Chargement des réglages équipes..." });
+        const totalChunks = Math.ceil(teamIds.length / TEAM_SETTINGS_CHUNK_SIZE);
+        for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+          throwIfCancelled();
+          const ids = teamIds.slice(
+            chunkIndex * TEAM_SETTINGS_CHUNK_SIZE,
+            (chunkIndex + 1) * TEAM_SETTINGS_CHUNK_SIZE
+          );
+          if (!ids.length) continue;
+          try {
+            const { data: settingsRows } = await withTimeout<any>(
+              supabaseBrowser
+                .from("team_algo_settings")
+                .select("team_id, settings, updated_at")
+                .eq("user_id", userId)
+                .in("team_id", ids),
+              NON_CRITICAL_QUERY_TIMEOUT_MS
+            );
+            (settingsRows ?? []).forEach((row: any) => {
+              remoteSettings.push({
+                team_id: Number(row.team_id),
+                settings: normalizeAlgoSettings(row.settings),
+                updated_at: typeof row.updated_at === "string" ? row.updated_at : null,
+              });
+            });
+          } catch {
+            // Ignore non-critical API errors/timeouts and continue with auto settings
+            logWarn("Team settings chunk fetch failed", {
+              chunk: chunkIndex + 1,
+              totalChunks,
+              chunkSize: ids.length,
+            });
+          }
+          if (totalChunks > 1) {
+            const pct = 37 + ((chunkIndex + 1) / totalChunks) * 2;
+            updateBgState({
+              progress: pct,
+              message: `Réglages équipes ${chunkIndex + 1}/${totalChunks}...`,
+            });
+          }
+        }
       }
+      logInfo("Team settings loaded from Supabase", {
+        rows: remoteSettings.length,
+      });
 
       const teamSettingsMap = new Map<number, AlgoSettings>();
+      const teamSettingsUpdatedAtMap = new Map<number, string | null>();
       remoteSettings.forEach((row) => {
         if (Number.isFinite(row.team_id)) {
           teamSettingsMap.set(row.team_id, row.settings);
+          teamSettingsUpdatedAtMap.set(row.team_id, row.updated_at ?? null);
         }
-      });
-      localSettings.forEach((settings, teamId) => {
-        teamSettingsMap.set(teamId, settings);
       });
 
       const bestSettingsCache = new Map<
@@ -1533,21 +1738,99 @@ export default function DailyScannerPanel() {
       const settingsByRow = new Map<string, AlgoSettings>();
       const autoSavedTeams = new Set<number>();
       const output: ScanResult[] = [];
+      const settingsDecisionStats = {
+        usedSaved: 0,
+        heavyChecks: 0,
+        bootstrapped: 0,
+        promoted: 0,
+        kept: 0,
+        fallbackNone: 0,
+        persisted: 0,
+        persistFailed: 0,
+      };
+      const persistTeamSettings = (teamId: number, settings: AlgoSettings, reason: string) => {
+        teamSettingsMap.set(teamId, settings);
+        const updatedAt = new Date().toISOString();
+        teamSettingsUpdatedAtMap.set(teamId, updatedAt);
+        if (autoSavedTeams.has(teamId)) return;
+        autoSavedTeams.add(teamId);
+        settingsDecisionStats.persisted += 1;
+        void (async () => {
+          try {
+            await supabaseBrowser
+              .from("team_algo_settings")
+              .upsert(
+                {
+                  user_id: userId,
+                  team_id: teamId,
+                  settings,
+                  updated_at: updatedAt,
+                },
+                { onConflict: "user_id,team_id" }
+              );
+            logInfo("Team settings upserted", { teamId, reason });
+          } catch {
+            // Ignore persist errors for background auto-saves
+            settingsDecisionStats.persistFailed += 1;
+            logWarn("Team settings upsert failed", { teamId, reason });
+          }
+        })();
+      };
 
-      updateBgState({ progress: 40, message: "Analyse des matchs..." });
-      throwIfCancelled();
-
-      let processedEvaluations = 0;
       const analysisProgressStart = 40;
       const analysisProgressEnd = 60;
-      const totalEvalSafe = Math.max(1, totalEvaluations);
+      const analysisTotalMatches = visibleFixtures.length;
+      const analysisTotalSafe = Math.max(1, analysisTotalMatches);
+      let analysisProcessedMatches = 0;
+      let lastAnalysisUiUpdateMs = 0;
+      const maybeUpdateAnalysisUi = async (force = false) => {
+        const nowMs = Date.now();
+        if (!force && nowMs - lastAnalysisUiUpdateMs < 3_000) return;
+        lastAnalysisUiUpdateMs = nowMs;
+        const pct =
+          analysisProgressStart +
+          (analysisProcessedMatches / analysisTotalSafe) *
+            (analysisProgressEnd - analysisProgressStart);
+        updateBgState({
+          progress: pct,
+          message: `${analysisProcessedMatches}/${analysisTotalMatches} match(s) analysé(s)...`,
+          analysisProcessed: analysisProcessedMatches,
+          analysisTotal: analysisTotalMatches,
+        });
+        await sleep(0);
+      };
+
+      updateBgState({
+        progress: analysisProgressStart,
+        message: `0/${analysisTotalMatches} match(s) analysé(s)...`,
+        analysisProcessed: 0,
+        analysisTotal: analysisTotalMatches,
+      });
+      logInfo("Analysis started", {
+        matches: analysisTotalMatches,
+        evaluations: totalEvaluations,
+      });
+      throwIfCancelled();
 
       for (const fixture of visibleFixtures) {
         throwIfCancelled();
+        analysisProcessedMatches += 1;
+        if (
+          analysisProcessedMatches === analysisTotalMatches ||
+          analysisProcessedMatches % 25 === 0
+        ) {
+          logInfo("Analysis progress", {
+            processed: analysisProcessedMatches,
+            total: analysisTotalMatches,
+          });
+        }
 
         const leagueId = Number(fixture.competition_id ?? 0);
         const leagueFixtures = leagueFixturesMap.get(leagueId) ?? [];
-        if (!leagueFixtures.length) continue;
+        if (!leagueFixtures.length) {
+          await maybeUpdateAnalysisUi();
+          continue;
+        }
 
         const matchInfo: NextMatchInfo = {
           fixtureId: fixture.id,
@@ -1565,42 +1848,70 @@ export default function DailyScannerPanel() {
           const teamId = Number(entry.team?.id ?? 0);
           if (!Number.isFinite(teamId)) continue;
 
-          processedEvaluations += 1;
           const cacheKey = `${leagueId}:${teamId}`;
           let cached = bestSettingsCache.get(cacheKey) ?? null;
           let evalResult = cached?.evalResult ?? null;
           let meetsCriteria = cached?.meetsCriteria ?? true;
           if (!bestSettingsCache.has(cacheKey)) {
-            const best = findBestSettingsV3(leagueFixtures, teamId);
-            evalResult = best?.evalResult ?? null;
-            meetsCriteria = best?.meetsCriteria ?? true;
-            bestSettingsCache.set(cacheKey, best);
+            const existingSettings = teamSettingsMap.get(teamId) ?? null;
+            const existingEval = existingSettings
+              ? computeTeamEval(leagueFixtures, teamId, existingSettings)
+              : null;
+            let selected =
+              existingEval == null
+                ? null
+                : {
+                    evalResult: existingEval,
+                    meetsCriteria: isEvalMeetsCriteria(existingEval),
+                  };
+            if (selected) settingsDecisionStats.usedSaved += 1;
+            const existingUpdatedAt = teamSettingsUpdatedAtMap.get(teamId) ?? null;
+            const dueRecalibration =
+              leagueId > 0
+                ? isSettingsRecalibrationDue(existingUpdatedAt, selected?.meetsCriteria ?? null)
+                : selected == null;
+            const shouldRunHeavyCheck = selected == null || dueRecalibration;
+
+            if (shouldRunHeavyCheck) {
+              settingsDecisionStats.heavyChecks += 1;
+              const best = findBestSettingsV3(leagueFixtures, teamId);
+              if (best?.evalResult) {
+                if (!selected) {
+                  selected = {
+                    evalResult: best.evalResult,
+                    meetsCriteria: best.meetsCriteria,
+                  };
+                  settingsDecisionStats.bootstrapped += 1;
+                  persistTeamSettings(teamId, best.evalResult.settings, "bootstrap");
+                } else if (shouldPromoteSettings(selected.evalResult, best.evalResult)) {
+                  selected = {
+                    evalResult: best.evalResult,
+                    meetsCriteria: best.meetsCriteria,
+                  };
+                  settingsDecisionStats.promoted += 1;
+                  persistTeamSettings(teamId, best.evalResult.settings, "promoted");
+                } else if (selected) {
+                  settingsDecisionStats.kept += 1;
+                  persistTeamSettings(teamId, selected.evalResult.settings, "rechecked-kept");
+                }
+              } else if (selected) {
+                settingsDecisionStats.kept += 1;
+                persistTeamSettings(teamId, selected.evalResult.settings, "rechecked-no-candidate");
+              } else {
+                settingsDecisionStats.fallbackNone += 1;
+              }
+            }
+
+            if (selected) {
+              evalResult = selected.evalResult;
+              meetsCriteria = selected.meetsCriteria;
+            } else {
+              evalResult = null;
+              meetsCriteria = false;
+            }
+            bestSettingsCache.set(cacheKey, selected);
           }
           if (!evalResult) continue;
-
-          if (!teamSettingsMap.has(teamId) && !autoSavedTeams.has(teamId)) {
-            const resolvedSettings = evalResult.settings;
-            teamSettingsMap.set(teamId, resolvedSettings);
-            persistLocalTeamSettings(teamId, resolvedSettings);
-            autoSavedTeams.add(teamId);
-            void (async () => {
-              try {
-                await supabaseBrowser
-                  .from("team_algo_settings")
-                  .upsert(
-                    {
-                      user_id: userId,
-                      team_id: teamId,
-                      settings: resolvedSettings,
-                      updated_at: new Date().toISOString(),
-                    },
-                    { onConflict: "user_id,team_id" }
-                  );
-              } catch {
-                // Ignore persist errors for background auto-saves
-              }
-            })();
-          }
 
           const pickResult = computeUpcomingPick(leagueFixtures, matchInfo, evalResult.settings);
           if (pickResult.status !== "pick" || !pickResult.pick) continue;
@@ -1609,7 +1920,9 @@ export default function DailyScannerPanel() {
           output.push({
             fixtureId: fixture.id,
             competitionId: Number.isFinite(leagueId) ? leagueId : null,
-            competitionName: competitionNameMap.get(leagueId) ?? null,
+            competitionName:
+              competitionNameMap.get(leagueId) ??
+              (Number.isFinite(leagueId) ? `Competition ${leagueId}` : null),
             competitionCountry: competitionCountryMap.get(leagueId) ?? null,
             competitionLogo: competitionLogoMap.get(leagueId) ?? null,
             season: resolveSeason(fixture),
@@ -1635,22 +1948,23 @@ export default function DailyScannerPanel() {
             meetsCriteria,
             isDiscouraged: false,
           });
-
-          if (processedEvaluations % 25 === 0) {
-            const pct =
-              analysisProgressStart +
-              (processedEvaluations / totalEvalSafe) *
-                (analysisProgressEnd - analysisProgressStart);
-            updateBgState({
-              progress: pct,
-              message: `Analyse ${processedEvaluations}/${totalEvaluations}...`,
-            });
-            await sleep(0);
-          }
         }
+
+        await maybeUpdateAnalysisUi();
       }
 
-      updateBgState({ progress: 60, message: "Analyse terminée. Chargement des cotes..." });
+      await maybeUpdateAnalysisUi(true);
+      logInfo("Analysis finished", {
+        processed: analysisProcessedMatches,
+        retainedBeforeOdds: output.length,
+        settings: settingsDecisionStats,
+      });
+      updateBgState({
+        progress: 60,
+        message: "Analyse terminée. Chargement des cotes...",
+        analysisProcessed: analysisProcessedMatches,
+        analysisTotal: analysisTotalMatches,
+      });
       throwIfCancelled();
 
       output.sort((a, b) => {
@@ -1748,9 +2062,18 @@ export default function DailyScannerPanel() {
             progress: pct,
             message: `Cotes ${processed}/${filteredOutput.length}...`,
           });
+          if (processed === filteredOutput.length || processed % 50 === 0) {
+            logInfo("Odds progress", {
+              processed,
+              total: filteredOutput.length,
+            });
+          }
         }
       }
 
+      logInfo("Odds enrichment finished", {
+        rowsWithOddsStage: filteredOutput.length,
+      });
       updateBgState({ progress: 90, message: "Cotes chargées." });
       throwIfCancelled();
 
@@ -1789,6 +2112,11 @@ export default function DailyScannerPanel() {
       })();
 
       const summary = `${visibleFixtures.length} match(s) analysé(s) • ${uniqueOutput.length} match(s) retenu(s) • ${totalEvaluations} évaluations`;
+      logInfo("Scan summary computed", {
+        visibleFixtures: visibleFixtures.length,
+        retained: uniqueOutput.length,
+        evaluations: totalEvaluations,
+      });
       safe(() => setResults((prev) => [...withoutDateKey(prev, dateKey), ...uniqueOutput]));
       safe(() => setScanInfoByDate((prev) => ({ ...prev, [dateKey]: summary })));
 
@@ -1827,6 +2155,11 @@ export default function DailyScannerPanel() {
         progress: 100,
         message: summary,
         rowsCount: uniqueOutput.length,
+      });
+      logInfo("Scan completed", {
+        durationMs: Date.now() - runStartMs,
+        rowsCount: uniqueOutput.length,
+        teamsPersisted: autoSavedTeams.size,
       });
       if (scanId) clearSearchBgScanCancel(scanId);
       safe(() =>
@@ -1867,6 +2200,15 @@ export default function DailyScannerPanel() {
     } catch (err: any) {
       const isAbort = err?.name === "AbortError";
       const message = isAbort ? "Recherche annulée." : err?.message ?? "Erreur lors du scan.";
+      if (isAbort) {
+        logWarn("Scan cancelled", { durationMs: Date.now() - runStartMs, message });
+      } else {
+        logError("Scan failed", {
+          durationMs: Date.now() - runStartMs,
+          message,
+          error: toErrorMessage(err),
+        });
+      }
       updateBgState({ status: "error", progress: 100, message, rowsCount: null });
       if (scanId) clearSearchBgScanCancel(scanId);
       safe(() => setError(isAbort ? null : message));
@@ -1897,9 +2239,11 @@ export default function DailyScannerPanel() {
       }
     } finally {
       if (cancelWatcher) clearInterval(cancelWatcher);
+      if (heartbeatWatcher) clearInterval(heartbeatWatcher);
       if (scanId && activeScanIdRef.current === scanId) {
         activeScanIdRef.current = null;
       }
+      safe(() => setRunningTarget(null));
       safe(() => setLoading(false));
       if (oddsAbortControllerRef.current === abortController) {
         oddsAbortControllerRef.current = null;
@@ -1965,24 +2309,23 @@ export default function DailyScannerPanel() {
 	            disabled={
 	              loading ||
 	              isInResetWindow ||
-	              todayRun?.status === "done" ||
-	              (todayRun?.status === "running" && !isRunStale(todayRun))
+	              todayIsRunning
 	            }
 	            title={
 	              isInResetWindow
 	                ? "Disponible à 00:01 (Toronto)."
-	                : todayRun?.status === "done"
-	                  ? "Déjà calculé et en cache."
-	                  : todayRun?.status === "running" && !isRunStale(todayRun)
+	                : todayDoneWithCache
+	                  ? "Cache déjà présent. Clique pour recalculer."
+	                  : todayIsRunning
 	                    ? `Scan déjà en cours (démarré à ${formatTime(todayRun.started_at)}).`
 	                    : "Calcule et met en cache les picks d'aujourd'hui."
 	            }
 	          >
-	            {todayRun?.status === "done"
-	              ? "Aujourd'hui (cache)"
-	              : todayRun?.status === "running" && !isRunStale(todayRun)
-	                ? "Aujourd'hui (en cours)"
-	                : todayRun?.status === "running"
+	            {todayIsRunning
+	              ? "Aujourd'hui (en cours)"
+	              : todayDoneWithCache
+	                ? "Relancer aujourd'hui (cache)"
+	                : todayRun?.status === "running" || todayRun?.status === "done"
 	                  ? "Relancer aujourd'hui"
 	                  : "Lancer aujourd'hui"}
 	          </button>
@@ -1993,24 +2336,23 @@ export default function DailyScannerPanel() {
 	            disabled={
 	              loading ||
 	              isInResetWindow ||
-	              tomorrowRun?.status === "done" ||
-	              (tomorrowRun?.status === "running" && !isRunStale(tomorrowRun))
+	              tomorrowIsRunning
 	            }
 	            title={
 	              isInResetWindow
 	                ? "Disponible à 00:01 (Toronto)."
-	                : tomorrowRun?.status === "done"
-	                  ? "Déjà calculé et en cache."
-	                  : tomorrowRun?.status === "running" && !isRunStale(tomorrowRun)
+	                : tomorrowDoneWithCache
+	                  ? "Cache déjà présent. Clique pour recalculer."
+	                  : tomorrowIsRunning
 	                    ? `Scan déjà en cours (démarré à ${formatTime(tomorrowRun.started_at)}).`
 	                    : "Calcule et met en cache les picks de demain."
 	            }
 	          >
-	            {tomorrowRun?.status === "done"
-	              ? "Demain (cache)"
-	              : tomorrowRun?.status === "running" && !isRunStale(tomorrowRun)
-	                ? "Demain (en cours)"
-	                : tomorrowRun?.status === "running"
+	            {tomorrowIsRunning
+	              ? "Demain (en cours)"
+	              : tomorrowDoneWithCache
+	                ? "Relancer demain (cache)"
+	                : tomorrowRun?.status === "running" || tomorrowRun?.status === "done"
 	                  ? "Relancer demain"
 	                  : "Lancer demain"}
 	          </button>
@@ -2065,7 +2407,11 @@ export default function DailyScannerPanel() {
 
       {results.length > 0 && filteredResults.length === 0 && !loading ? (
         <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-sm text-white/60">
-          Aucun match pour {dayTab === "today" ? formatDateLabel(todayLabel) : formatDateLabel(tomorrowLabel)}.
+          {hideDiscouraged &&
+          activeRawResults.length > 0 &&
+          activeRawResults.every((row) => row.isDiscouraged)
+            ? "Tous les matchs trouvés sont marqués comme déconseillés. Décochez \"Masquer les choix déconseillés\" pour les afficher."
+            : `Aucun match pour ${dayTab === "today" ? formatDateLabel(todayLabel) : formatDateLabel(tomorrowLabel)}.`}
         </div>
       ) : null}
 

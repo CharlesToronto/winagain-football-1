@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { refreshFixturesWindow } from "@/lib/fixtures/refreshFixturesWindow";
 
 export const dynamic = "force-dynamic";
 
@@ -46,8 +47,65 @@ type LeagueHistoryRow = {
   status: string | null;
 };
 
-function startOfDay(value: Date) {
-  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+const TIMEZONE = "America/Toronto";
+
+type Ymd = { year: number; month: number; day: number };
+
+function getTzParts(date: Date, timeZone: string) {
+  const dtf = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const parts = dtf.formatToParts(date).reduce<Record<string, string>>((acc, part) => {
+    if (part.type !== "literal") acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+  };
+}
+
+function getTimezoneOffset(date: Date, timeZone: string) {
+  const parts = getTzParts(date, timeZone);
+  const asUTC = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second
+  );
+  return (asUTC - date.getTime()) / 60000;
+}
+
+function formatYmdKey(value: Ymd) {
+  return `${value.year}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
+}
+
+function addDays(value: Ymd, delta: number): Ymd {
+  const d = new Date(Date.UTC(value.year, value.month - 1, value.day + delta, 12, 0, 0));
+  return {
+    year: d.getUTCFullYear(),
+    month: d.getUTCMonth() + 1,
+    day: d.getUTCDate(),
+  };
+}
+
+function utcStartForYmd(value: Ymd, timeZone: string) {
+  const midnightUTC = Date.UTC(value.year, value.month - 1, value.day, 0, 0, 0);
+  const offset = getTimezoneOffset(new Date(midnightUTC), timeZone);
+  return new Date(midnightUTC - offset * 60000);
 }
 
 function formatDateKey(value: Date) {
@@ -61,14 +119,19 @@ function getDateKey(value?: string | null) {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return formatDateKey(date);
+  const parts = getTzParts(date, TIMEZONE);
+  return formatYmdKey({ year: parts.year, month: parts.month, day: parts.day });
 }
 
 function formatTime(value?: string | null) {
   if (!value) return "--:--";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "--:--";
-  return date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  return date.toLocaleTimeString("fr-FR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: TIMEZONE,
+  });
 }
 
 function safeTime(value?: string | null) {
@@ -112,17 +175,18 @@ export default async function RencontrePage({
   searchParams?: { day?: string };
 }) {
   const now = new Date();
-  const today = startOfDay(now);
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  const tomorrow = new Date(today);
-  tomorrow.setDate(today.getDate() + 1);
-  const dayAfterTomorrow = new Date(today);
-  dayAfterTomorrow.setDate(today.getDate() + 2);
+  const tzNow = getTzParts(now, TIMEZONE);
+  const todayYmd: Ymd = { year: tzNow.year, month: tzNow.month, day: tzNow.day };
+  const yesterdayYmd = addDays(todayYmd, -1);
+  const tomorrowYmd = addDays(todayYmd, 1);
+  const dayAfterTomorrowYmd = addDays(todayYmd, 2);
 
-  const yesterdayKey = formatDateKey(yesterday);
-  const todayKey = formatDateKey(today);
-  const tomorrowKey = formatDateKey(tomorrow);
+  const startYesterdayUtc = utcStartForYmd(yesterdayYmd, TIMEZONE);
+  const startDayAfterTomorrowUtc = utcStartForYmd(dayAfterTomorrowYmd, TIMEZONE);
+
+  const yesterdayKey = formatYmdKey(yesterdayYmd);
+  const todayKey = formatYmdKey(todayYmd);
+  const tomorrowKey = formatYmdKey(tomorrowYmd);
   const activeDay =
     searchParams?.day === "yesterday"
       ? "yesterday"
@@ -131,6 +195,17 @@ export default async function RencontrePage({
         : "today";
 
   const supabase = createClient();
+
+  try {
+    await refreshFixturesWindow(supabase as any, {
+      dateKeys: [yesterdayKey, todayKey, tomorrowKey],
+      ttlMinutes: 5,
+      timeZone: TIMEZONE,
+    });
+  } catch (err) {
+    console.error("Rencontre fixtures refresh failed", err);
+  }
+
   const { data, error } = await supabase
     .from("fixtures")
     .select(
@@ -146,8 +221,8 @@ export default async function RencontrePage({
       away:away_team_id ( id, name, logo )
     `
     )
-    .gte("date_utc", yesterday.toISOString())
-    .lt("date_utc", dayAfterTomorrow.toISOString())
+    .gte("date_utc", startYesterdayUtc.toISOString())
+    .lt("date_utc", startDayAfterTomorrowUtc.toISOString())
     .order("date_utc", { ascending: true });
 
   const fixtures: FixtureRow[] = (data ?? []).map((row: any) => ({
@@ -256,7 +331,16 @@ export default async function RencontrePage({
     const compId = Number.isFinite(fixture.competition_id)
       ? Number(fixture.competition_id)
       : 0;
-    const competition = competitionMap.get(compId);
+    const competition =
+      competitionMap.get(compId) ??
+      (compId
+        ? {
+            id: compId,
+            name: `Competition ${compId}`,
+            country: null,
+            logo: null,
+          }
+        : null);
     if (!competition) return;
 
     const groups = dayGroups.get(key)!;

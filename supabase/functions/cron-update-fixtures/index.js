@@ -10,7 +10,7 @@ serve(async () => {
     );
   }
 
-  const res = await fetch(`${BASE_URL}/api/update/fixtures`, {
+  const res = await fetch(`${BASE_URL}/api/update/fixtures-window?force=1`, {
     method: "GET",
   });
 

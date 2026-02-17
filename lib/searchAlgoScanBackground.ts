@@ -14,6 +14,8 @@ export type SearchBgScanState = {
   progress: number; // 0..100
   message: string | null;
   rowsCount: number | null;
+  analysisProcessed: number | null;
+  analysisTotal: number | null;
 };
 
 export function readSearchBgScanState(): SearchBgScanState | null {
@@ -46,6 +48,18 @@ export function readSearchBgScanState(): SearchBgScanState | null {
           ? null
           : typeof parsed.rowsCount === "number" && Number.isFinite(parsed.rowsCount)
             ? parsed.rowsCount
+            : null,
+      analysisProcessed:
+        parsed.analysisProcessed == null
+          ? null
+          : typeof parsed.analysisProcessed === "number" && Number.isFinite(parsed.analysisProcessed)
+            ? Math.max(0, Math.floor(parsed.analysisProcessed))
+            : null,
+      analysisTotal:
+        parsed.analysisTotal == null
+          ? null
+          : typeof parsed.analysisTotal === "number" && Number.isFinite(parsed.analysisTotal)
+            ? Math.max(0, Math.floor(parsed.analysisTotal))
             : null,
     };
   } catch {
@@ -112,4 +126,3 @@ export function clearSearchBgScanCancel(scanId: string) {
     }
   }
 }
-

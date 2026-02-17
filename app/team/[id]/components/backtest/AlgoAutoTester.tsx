@@ -804,13 +804,13 @@ export default function AlgoAutoTester({
           </div>
         </div>
 
-        <div className="flex flex-nowrap items-end gap-3 overflow-x-auto no-scrollbar sm:flex-wrap sm:overflow-visible">
+        <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
           <div className="flex flex-col gap-1">
             <span className="text-[11px] uppercase tracking-wide text-white/50">
               Saison
             </span>
             <select
-              className="rounded bg-[#1f0f3a] border border-white/20 px-2 py-1 text-sm text-white [color-scheme:dark]"
+              className="w-full rounded bg-[#1f0f3a] border border-white/20 px-2 py-1 text-sm text-white [color-scheme:dark] sm:w-auto"
               value={seasonMode}
               onChange={(e) => setSeasonMode(e.target.value as SeasonMode)}
             >
@@ -827,7 +827,7 @@ export default function AlgoAutoTester({
               type="number"
               min={20}
               max={50}
-              className="w-20 rounded bg-[#1f0f3a] border border-white/20 px-2 py-1 text-sm text-white"
+              className="w-full rounded bg-[#1f0f3a] border border-white/20 px-2 py-1 text-sm text-white sm:w-20"
               value={testsCount}
               onChange={(e) => setTestsCount(Number(e.target.value))}
               title="Nombre de combinaisons (20-50)"
@@ -841,7 +841,7 @@ export default function AlgoAutoTester({
               type="number"
               min={5}
               max={100}
-              className="w-20 rounded bg-[#1f0f3a] border border-white/20 px-2 py-1 text-sm text-white"
+              className="w-full rounded bg-[#1f0f3a] border border-white/20 px-2 py-1 text-sm text-white sm:w-20"
               value={resultLimit}
               onChange={(e) => setResultLimit(Number(e.target.value))}
               title="Top N résultats"
@@ -856,7 +856,7 @@ export default function AlgoAutoTester({
               step="0.05"
               min={0}
               max={1}
-              className="w-24 rounded bg-[#1f0f3a] border border-white/20 px-2 py-1 text-sm text-white"
+              className="w-full rounded bg-[#1f0f3a] border border-white/20 px-2 py-1 text-sm text-white sm:w-24"
               value={minCoverage}
               onChange={(e) => setMinCoverage(Number(e.target.value))}
               title="Coverage minimum"
@@ -864,7 +864,7 @@ export default function AlgoAutoTester({
           </div>
         </div>
 
-        <div className="flex flex-nowrap items-center gap-2 overflow-x-auto no-scrollbar sm:flex-wrap sm:overflow-visible">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-white/60">Lines incluses</span>
           {LINE_OPTIONS.map((line) => {
             const key = lineKey(line);
@@ -900,13 +900,13 @@ export default function AlgoAutoTester({
       ) : error ? (
         <p className="text-sm text-red-200">{error}</p>
       ) : results.length === 0 ? (
-        <p className="text-sm text-white/70 hidden sm:block">
+        <p className="text-sm text-white/70">
           {typingText}
           <span className="ml-1 inline-block animate-pulse text-white/60">|</span>
         </p>
       ) : (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-white/70">
+          <div className="flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm text-white/70">
             <div>
               {runSummary ? (
                 <>
@@ -959,51 +959,86 @@ export default function AlgoAutoTester({
               {sortedResults.map((row, index) => (
                 <div
                   key={row.id}
-                  className={`flex flex-col gap-2 rounded-lg border px-3 py-2 ${
+                  className={`rounded-xl border px-3 py-3 ${
                     row.stats.hitRate >= 0.85
                       ? "border-orange-400/60 bg-orange-500/10"
                       : "border-white/10 bg-white/5"
                   }`}
                 >
-                  <div className="flex flex-wrap items-center gap-3 text-sm">
-                    <div className="text-white/70">#{index + 1}</div>
-                    <div className="flex flex-wrap items-center gap-2 text-white/70">
-                      <span>win {row.settings.windowSize}</span>
-                      <span>bucket {row.settings.bucketSize}</span>
-                      <span>thr {row.settings.threshold.toFixed(2)}</span>
-                      <span>lines {row.settings.lines.join("/")}</span>
-                    </div>
-                    <div className="ml-auto flex items-center gap-3">
-                      <div className="text-blue-300 font-semibold whitespace-nowrap">
-                        Hit {(row.stats.hitRate * 100).toFixed(1)}% • Cov {(row.stats.coverage * 100).toFixed(1)}% • {row.stats.hits}/{row.stats.picks} • ROI {(row.stats.roiScore * 100).toFixed(1)}% • Value {(row.stats.valueScore * 100).toFixed(1)}%
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-xs text-white/70">#{index + 1}</div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        saveTeamSettings(row.settings);
+                        triggerSaved(`row-${row.id}-team`);
+                        setResultsOpen(false);
+                        void logAlgoEvent({
+                          eventType: "save_team",
+                          teamId,
+                          leagueId,
+                          payload: { source: "autotest", settings: row.settings },
+                        });
+                      }}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/60 text-white/80 bg-transparent transition hover:border-orange-400 hover:bg-orange-500/20 hover:text-white active:scale-95 ${
+                        savedKey === `row-${row.id}-team`
+                          ? "ring-2 ring-orange-400/60 animate-pulse border-orange-400 text-orange-200"
+                          : ""
+                      }`}
+                      disabled={!teamId}
+                      aria-label="Save as team"
+                      title="Save as team"
+                    >
+                      <IconSave size={16} />
+                    </button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-white/70">
+                    <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1">
+                      win {row.settings.windowSize}
+                    </span>
+                    <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1">
+                      bucket {row.settings.bucketSize}
+                    </span>
+                    <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1">
+                      thr {row.settings.threshold.toFixed(2)}
+                    </span>
+                    <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1 break-all">
+                      lines {row.settings.lines.join("/")}
+                    </span>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-5">
+                    <div className="rounded-md border border-white/10 bg-white/5 px-2 py-1.5">
+                      <div className="text-white/60">Hit</div>
+                      <div className="font-semibold text-blue-300">
+                        {(row.stats.hitRate * 100).toFixed(1)}%
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          saveTeamSettings(row.settings);
-                          triggerSaved(`row-${row.id}-team`);
-                          setResultsOpen(false);
-                          void logAlgoEvent({
-                            eventType: "save_team",
-                            teamId,
-                            leagueId,
-                            payload: { source: "autotest", settings: row.settings },
-                          });
-                        }}
-                        className={`ml-auto inline-flex items-center justify-center rounded-md border border-white/60 text-white/80 bg-transparent transition hover:border-orange-400 hover:bg-orange-500/20 hover:text-white active:scale-95 ${
-                          savedKey === `row-${row.id}-team`
-                            ? "ring-2 ring-orange-400/60 animate-pulse border-orange-400 text-orange-200"
-                            : ""
-                        }`}
-                        disabled={!teamId}
-                        aria-label="Save as team"
-                        title="Save as team"
-                      >
-                        <IconSave size={16} />
-                      </button>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-white/5 px-2 py-1.5">
+                      <div className="text-white/60">Cov</div>
+                      <div className="font-semibold text-blue-300">
+                        {(row.stats.coverage * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-white/5 px-2 py-1.5">
+                      <div className="text-white/60">Picks</div>
+                      <div className="font-semibold text-blue-300">
+                        {row.stats.hits}/{row.stats.picks}
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-white/5 px-2 py-1.5">
+                      <div className="text-white/60">ROI</div>
+                      <div className="font-semibold text-blue-300">
+                        {(row.stats.roiScore * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-white/10 bg-white/5 px-2 py-1.5">
+                      <div className="text-white/60">Value</div>
+                      <div className="font-semibold text-blue-300">
+                        {(row.stats.valueScore * 100).toFixed(1)}%
+                      </div>
                     </div>
                   </div>
-                  <div className="text-xs text-white/60">
+                  <div className="mt-3 text-[11px] leading-relaxed text-white/60 break-all">
                     Weights: {row.settings.weights.join(", ")} • Min team {row.settings.minMatches} • Min league {row.settings.minLeagueMatches}
                   </div>
                 </div>

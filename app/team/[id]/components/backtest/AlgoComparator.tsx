@@ -309,12 +309,12 @@ export default function AlgoComparator({
   }
 
   return (
-    <div className="rounded-xl p-5 text-white bg-transparent border border-white/10">
+    <div className="rounded-xl border border-white/10 bg-transparent p-3 text-white sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <div>
           <h2 className="text-xl font-semibold">Tests rapides (team only)</h2>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           {onClose ? (
             <button
               type="button"
@@ -325,7 +325,7 @@ export default function AlgoComparator({
             </button>
           ) : null}
           <select
-            className="rounded bg-[#1f0f3a] border border-white/20 px-2 py-1 text-sm text-white [color-scheme:dark]"
+            className="min-w-0 flex-1 rounded bg-[#1f0f3a] border border-white/20 px-2 py-1 text-sm text-white [color-scheme:dark] sm:flex-none"
             value={seasonMode}
             onChange={(e) => setSeasonMode(e.target.value as SeasonMode)}
           >
@@ -336,7 +336,7 @@ export default function AlgoComparator({
           <button
             type="button"
             onClick={runAll}
-            className="px-3 py-1 rounded-lg text-sm bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white transition hover:from-green-400 hover:via-emerald-400 hover:to-lime-400"
+            className="rounded-lg bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 px-3 py-1 text-sm text-white transition hover:from-green-400 hover:via-emerald-400 hover:to-lime-400"
           >
             Run all
           </button>
@@ -363,37 +363,37 @@ export default function AlgoComparator({
                 <button
                   type="button"
                   onClick={() => handleRowUpdate(row.id, { expanded: !row.expanded })}
-                  className="w-full flex flex-wrap items-center justify-between gap-3 px-3 py-2 text-left"
+                  className="w-full px-3 py-2 text-left"
                 >
                   {row.expanded ? (
-                    <>
-                      <div className="flex items-center gap-2 text-sm">
+                    <div className="flex flex-col gap-2">
+                      <div className="flex flex-wrap items-center gap-2 text-sm">
                         <span className="text-white/60">Test {index + 1}</span>
                         <span className="text-white/80">thr {row.threshold.toFixed(2)}</span>
                         <span className="text-white/60">win {row.windowSize}</span>
                         <span className="text-white/60">bucket {row.bucketSize}</span>
                       </div>
-                      <div className="flex items-center gap-3 text-sm">
-                        <span className="text-white/60">
+                      <div className="grid grid-cols-3 gap-2 text-[11px] sm:flex sm:flex-wrap sm:items-center sm:gap-3 sm:text-sm">
+                        <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white/60">
                           Hit{" "}
-                          <span className={summary ? "text-blue-300 font-semibold" : "text-white/60"}>
+                          <span className={summary ? "text-blue-300 font-semibold" : "text-white/70"}>
                             {hitRateLabel}
                           </span>
                         </span>
-                        <span className="text-white/60">
+                        <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white/60">
                           Cov{" "}
-                          <span className={summary ? "text-blue-300 font-semibold" : "text-white/60"}>
+                          <span className={summary ? "text-blue-300 font-semibold" : "text-white/70"}>
                             {coverageLabel}
                           </span>
                         </span>
-                        <span className="text-white/60">
+                        <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white/60">
                           Picks{" "}
-                          <span className={summary ? "text-blue-300 font-semibold" : "text-white/60"}>
+                          <span className={summary ? "text-blue-300 font-semibold" : "text-white/70"}>
                             {picksLabel}
                           </span>
                         </span>
                       </div>
-                    </>
+                    </div>
                   ) : (
                     <div className="text-sm text-white/80">Test {index + 1}</div>
                   )}
@@ -523,7 +523,7 @@ export default function AlgoComparator({
                       <button
                         type="button"
                         onClick={() => runRow(row.id)}
-                        className="px-3 py-1 rounded-lg text-sm bg-blue-500 text-white"
+                        className="w-full rounded-lg bg-blue-500 px-3 py-1 text-sm text-white sm:w-auto"
                       >
                         {row.running ? "Running..." : "Run"}
                       </button>
@@ -533,7 +533,7 @@ export default function AlgoComparator({
                           applyRow(row);
                           triggerSaved(`global-${row.id}`);
                         }}
-                        className={`px-3 py-1 rounded-lg text-sm border border-white/60 text-white/80 bg-transparent transition hover:border-orange-400 hover:bg-orange-500/20 hover:text-white active:scale-95 ${
+                        className={`w-full rounded-lg border border-white/60 bg-transparent px-3 py-1 text-sm text-white/80 transition hover:border-orange-400 hover:bg-orange-500/20 hover:text-white active:scale-95 sm:w-auto ${
                           savedKey === `global-${row.id}`
                             ? "ring-2 ring-orange-400/60 animate-pulse border-orange-400 text-orange-200"
                             : ""
@@ -547,7 +547,7 @@ export default function AlgoComparator({
                           applyRowTeam(row);
                           triggerSaved(`team-${row.id}`);
                         }}
-                        className={`px-3 py-1 rounded-lg text-sm border border-white/60 text-white/80 bg-transparent transition hover:border-orange-400 hover:bg-orange-500/20 hover:text-white active:scale-95 ${
+                        className={`w-full rounded-lg border border-white/60 bg-transparent px-3 py-1 text-sm text-white/80 transition hover:border-orange-400 hover:bg-orange-500/20 hover:text-white active:scale-95 sm:w-auto ${
                           savedKey === `team-${row.id}`
                             ? "ring-2 ring-orange-400/60 animate-pulse border-orange-400 text-orange-200"
                             : ""
