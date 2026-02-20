@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { refreshFixturesWindow } from "@/lib/fixtures/refreshFixturesWindow";
+import { writeFixtureUpdateReport } from "@/lib/fixtures/reporting";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -44,6 +45,8 @@ function parseTtlMinutes(raw: string | null) {
 }
 
 export async function GET(req: Request) {
+  const startedAt = Date.now();
+  const startedAtIso = new Date(startedAt).toISOString();
   const supabase = createClient();
   const url = new URL(req.url);
   const date = url.searchParams.get("date");
@@ -76,6 +79,27 @@ export async function GET(req: Request) {
     includeTeams,
   });
 
+  const reports = result.reports ?? [];
+  const refreshedCount = reports.filter((report) => report.refreshed).length;
+  const errorCount = reports.filter((report) => Boolean(report.error)).length;
+
+  await writeFixtureUpdateReport(supabase as any, {
+    jobName: "api_update_fixtures_window",
+    source: "api:/api/update/fixtures-window",
+    status: result.ok ? "success" : "error",
+    startedAt: startedAtIso,
+    durationMs: Date.now() - startedAt,
+    payload: {
+      dateKeys,
+      ttlMinutes,
+      force,
+      includeTeams,
+      refreshedCount,
+      errorCount,
+      reports,
+    },
+    error: result.ok ? null : `refreshFixturesWindow returned ${errorCount} error report(s).`,
+  });
+
   return NextResponse.json(result, { status: result.ok ? 200 : 500 });
 }
-

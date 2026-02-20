@@ -73,7 +73,16 @@ export async function GET(request: Request) {
           .filter((id: number) => Number.isFinite(id))
       )
     );
+    const fixtureIds = Array.from(
+      new Set(
+        items
+          .map((row: any) => Number(row?.fixture_id))
+          .filter((id: number) => Number.isFinite(id) && id > 0)
+      )
+    );
     const competitionCountryMap = new Map<number, string>();
+    const fixtureHomeTeamMap = new Map<number, number | null>();
+    const fixtureAwayTeamMap = new Map<number, number | null>();
     if (leagueIds.length) {
       const { data: competitions, error: compError } = await supabase
         .from("competitions")
@@ -89,9 +98,33 @@ export async function GET(request: Request) {
       });
     }
 
+    if (fixtureIds.length) {
+      const chunkSize = 1000;
+      for (let index = 0; index < fixtureIds.length; index += chunkSize) {
+        const chunk = fixtureIds.slice(index, index + chunkSize);
+        const { data: fixtures, error: fixturesError } = await supabase
+          .from("fixtures")
+          .select("id,home_team_id,away_team_id")
+          .in("id", chunk);
+        if (fixturesError) {
+          return NextResponse.json({ error: fixturesError.message }, { status: 500 });
+        }
+        (fixtures ?? []).forEach((row: any) => {
+          const id = Number(row?.id);
+          if (!Number.isFinite(id)) return;
+          const homeTeamId = Number(row?.home_team_id);
+          const awayTeamId = Number(row?.away_team_id);
+          fixtureHomeTeamMap.set(id, Number.isFinite(homeTeamId) ? homeTeamId : null);
+          fixtureAwayTeamMap.set(id, Number.isFinite(awayTeamId) ? awayTeamId : null);
+        });
+      }
+    }
+
     const enriched = items.map((row: any) => ({
       ...row,
       competition_country: competitionCountryMap.get(Number(row?.league_id)) ?? null,
+      home_team_id: fixtureHomeTeamMap.get(Number(row?.fixture_id)) ?? null,
+      away_team_id: fixtureAwayTeamMap.get(Number(row?.fixture_id)) ?? null,
     }));
 
     const res = NextResponse.json({ items: enriched });

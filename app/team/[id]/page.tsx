@@ -66,7 +66,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
   const [favorites, setFavorites] = useState<FavoriteTeam[]>([]);
   const [opponentFixtures, setOpponentFixtures] = useState<FixtureItem[]>([]);
   const [overUnderHighlight, setOverUnderHighlight] = useState(false);
-  const [showOdds, setShowOdds] = useState(false);
+  const [showOdds, setShowOdds] = useState(true);
   const [showOpponentComparison, setShowOpponentComparison] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);

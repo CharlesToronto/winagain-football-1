@@ -27,6 +27,7 @@ import {
 const BASELINE_HOME = 1.35;
 const BASELINE_AWAY = 1.15;
 const TREND_WINDOW_SIZE = 10;
+const MIN_ODDS_RETRY = 1.2;
 
 type RangeOption = number | "season";
 
@@ -64,6 +65,13 @@ type PickResult = {
   reason?: string;
 };
 
+type FixtureOdds = {
+  overUnder?: { over: Record<string, string>; under: Record<string, string> };
+  doubleChance?: Record<"1X" | "X2" | "12", string>;
+} | null;
+
+type MarketLine = number | "1X" | "X2" | "12";
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
@@ -83,6 +91,18 @@ function poissonCdf(lambda: number, k: number) {
 function shrink(avg: number, n: number, priorAvg: number, priorN: number) {
   if (!n) return priorAvg;
   return (avg * n + priorAvg * priorN) / (n + priorN);
+}
+
+function parseOddValue(value?: string | null) {
+  if (!value) return null;
+  const parsed = Number.parseFloat(String(value).replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isSameLine(a: MarketLine, b: MarketLine) {
+  if (typeof a === "number" && typeof b === "number") return a === b;
+  if (typeof a === "string" && typeof b === "string") return a === b;
+  return false;
 }
 
 function buildNextMatchInfo(nextMatch: BacktestViewProps["nextMatch"]): NextMatchInfo | null {
@@ -106,7 +126,8 @@ function buildNextMatchInfo(nextMatch: BacktestViewProps["nextMatch"]): NextMatc
 function computeUpcomingPick(
   fixtures: FixtureRow[],
   nextMatch: NextMatchInfo | null,
-  settings: AlgoSettings
+  settings: AlgoSettings,
+  excludeLine?: MarketLine | null
 ): PickResult {
   if (!nextMatch) {
     return { status: "no-data", reason: "Prochain match indisponible." };
@@ -196,6 +217,7 @@ function computeUpcomingPick(
     | { type: "dc"; line: "1X" | "X2" | "12"; probability: number }
     | null = null;
   for (const line of settings.lines) {
+    if (excludeLine != null && isSameLine(line as MarketLine, excludeLine)) continue;
     if (typeof line === "number") {
       const thresholdLine = Math.floor(line);
       const pUnder = poissonCdf(lambda, thresholdLine);
@@ -249,6 +271,40 @@ function formatDateTime(value: string | null) {
   return format(parsed, "dd MMM yyyy HH:mm");
 }
 
+function resolvePickOdd(pick: string | undefined, odds: FixtureOdds) {
+  if (!pick || !odds) return null;
+  const normalized = pick.trim();
+  if (normalized === "1X" || normalized === "X2" || normalized === "12") {
+    return odds.doubleChance?.[normalized] ?? null;
+  }
+  const match = normalized.match(/^(Over|Under)\s+([0-9]+(?:\.[0-9]+)?)$/i);
+  if (!match) return null;
+  const side = match[1].toLowerCase() === "over" ? "over" : "under";
+  const rawLine = match[2];
+  const parsedLine = Number.parseFloat(rawLine);
+  const candidateKeys = Number.isFinite(parsedLine)
+    ? Array.from(new Set([rawLine, String(parsedLine)]))
+    : [rawLine];
+  for (const key of candidateKeys) {
+    const odd = odds.overUnder?.[side]?.[key];
+    if (odd) return odd;
+  }
+  return null;
+}
+
+function extractPickLine(pick: string): MarketLine | null {
+  if (!pick) return null;
+  const trimmed = pick.trim();
+  if (trimmed === "1X" || trimmed === "X2" || trimmed === "12") {
+    return trimmed as MarketLine;
+  }
+  const match = trimmed.match(/^(Over|Under)\s+([0-9]+(?:[.,][0-9]+)?)$/i);
+  if (!match) return null;
+  const line = Number(String(match[2]).replace(",", "."));
+  if (!Number.isFinite(line)) return null;
+  return line;
+}
+
 export default function BacktestView({
   teamId,
   leagueId,
@@ -263,6 +319,7 @@ export default function BacktestView({
   const [fixturesBySeason, setFixturesBySeason] = useState<Record<number, FixtureRow[]>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [nextMatchOdds, setNextMatchOdds] = useState<FixtureOdds>(null);
 
   const seasons = useMemo(() => {
     if (seasonMode === "both") return [currentSeason - 1, currentSeason];
@@ -330,11 +387,62 @@ export default function BacktestView({
     });
   }, [fixtures, fixturesBySeason, seasons, seasonMode, teamId, settings]);
   const nextMatchInfo = useMemo(() => buildNextMatchInfo(nextMatch ?? null), [nextMatch]);
-  const nextPick = useMemo(
+  const nextPickBase = useMemo(
     () => computeUpcomingPick(fixtures, nextMatchInfo, settings),
     [fixtures, nextMatchInfo, settings]
   );
+  const nextPickBaseOdd = useMemo(
+    () => resolvePickOdd(nextPickBase.pick, nextMatchOdds),
+    [nextPickBase.pick, nextMatchOdds]
+  );
+  const nextPickBaseOddValue = useMemo(
+    () => parseOddValue(nextPickBaseOdd),
+    [nextPickBaseOdd]
+  );
+  const nextPick = useMemo(() => {
+    if (nextPickBase.status !== "pick" || !nextPickBase.pick) return nextPickBase;
+    if (nextPickBaseOddValue != null && nextPickBaseOddValue >= MIN_ODDS_RETRY) {
+      return nextPickBase;
+    }
+    const excludeLine = extractPickLine(nextPickBase.pick);
+    if (excludeLine == null) return nextPickBase;
+    const alternate = computeUpcomingPick(fixtures, nextMatchInfo, settings, excludeLine);
+    if (alternate.status !== "pick" || !alternate.pick) return nextPickBase;
+    const alternateOddValue = parseOddValue(resolvePickOdd(alternate.pick, nextMatchOdds));
+    const currentOddValue = nextPickBaseOddValue ?? 0;
+    if (alternateOddValue != null && alternateOddValue > currentOddValue) {
+      return alternate;
+    }
+    return nextPickBase;
+  }, [fixtures, nextMatchInfo, nextMatchOdds, nextPickBase, nextPickBaseOddValue, settings]);
+  const nextPickOdd = useMemo(
+    () => resolvePickOdd(nextPick.pick, nextMatchOdds),
+    [nextPick.pick, nextMatchOdds]
+  );
   const hasUpcomingPick = nextPick.status === "pick";
+
+  useEffect(() => {
+    if (!nextMatchInfo?.fixtureId || !leagueId) {
+      setNextMatchOdds(null);
+      return;
+    }
+    let active = true;
+    fetch(
+      `/api/odds/fixture?fixture=${nextMatchInfo.fixtureId}&league=${leagueId}&season=${currentSeason}&bookmakers=4,16`
+    )
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!active) return;
+        setNextMatchOdds(data?.odds ?? null);
+      })
+      .catch(() => {
+        if (!active) return;
+        setNextMatchOdds(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [nextMatchInfo?.fixtureId, leagueId, currentSeason]);
 
   const picksForRange = useMemo(() => {
     const sorted = [...resultPicks].sort((a, b) => b.dateTime - a.dateTime);
@@ -416,6 +524,9 @@ export default function BacktestView({
                 <p className="text-xs text-white/60">
                   {((nextPick.probability ?? 0) * 100).toFixed(1)}%
                 </p>
+                {nextPickOdd ? (
+                  <p className="text-xs text-white/70">Odd: {nextPickOdd}</p>
+                ) : null}
               </>
             ) : (
               <>

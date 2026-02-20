@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { fetchApi } from "@/lib/football";
 import { ALL_COMPETITION_IDS } from "@/app/lib/data/competitionIds";
+import { writeFixtureUpdateReport } from "@/lib/fixtures/reporting";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,7 @@ const SEASON = 2025;
 
 export async function GET() {
   const startedAt = Date.now();
+  const startedAtIso = new Date(startedAt).toISOString();
   const supabase = createClient();
 
   let apiFixtures = 0;
@@ -97,8 +99,7 @@ export async function GET() {
   }
 
   const durationMs = Date.now() - startedAt;
-
-  return NextResponse.json({
+  const responseBody = {
     ok: errors.length === 0,
     mode: "REFRESH_STATUS_SEASON_2025_API_FIRST",
     season: SEASON,
@@ -110,5 +111,26 @@ export async function GET() {
     errorCount: errors.length,
     errors,
     durationMs,
+  };
+
+  await writeFixtureUpdateReport(supabase as any, {
+    jobName: "api_update_fixtures_ft",
+    source: "api:/api/update/fixtures",
+    status: errors.length === 0 ? "success" : "error",
+    startedAt: startedAtIso,
+    durationMs,
+    payload: {
+      season: SEASON,
+      leagues: ALL_COMPETITION_IDS.length,
+      apiFixtures,
+      checked,
+      updated,
+      ignored,
+      errorCount: errors.length,
+      errorSamples: errors.slice(0, 25),
+    },
+    error: errors.length ? `Fixtures update completed with ${errors.length} error(s).` : null,
   });
+
+  return NextResponse.json(responseBody);
 }

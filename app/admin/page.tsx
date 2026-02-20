@@ -22,6 +22,29 @@ type BroadcastRow = {
   ends_at: string | null;
 };
 
+type FixtureReportRow = {
+  id: string;
+  job_name: string;
+  source: string;
+  status: string;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number | null;
+  payload: Record<string, any> | null;
+  error: string | null;
+  created_at: string;
+};
+
+type FixtureReportDayCard = {
+  dateKey: string;
+  total: number;
+  success: number;
+  errors: number;
+  avgDurationMs: number | null;
+  jobsCount: number;
+  lastRunAt: string | null;
+};
+
 type PickLite = {
   snapshot_date: string;
   fixture_id: number;
@@ -60,8 +83,14 @@ const DISCOURAGED_COMPETITIONS = new Set([
   "Belgium|||Challenger Pro League",
   "Hungary|||NB II",
   "Italy|||Serie C - Girone A",
+  "Italy|||Serie B",
+  "Israel|||Liga Leumit",
+  "Mexico|||Liga Premier Serie A",
+  "Poland|||I Liga",
+  "Azerbaijan|||Birinci Dasta",
   "Romania|||Liga I",
   "Serbia|||Super Liga",
+  "Slovakia|||Super Liga",
 ]);
 
 function isMissingTable(error: any) {
@@ -94,6 +123,59 @@ function formatSeconds(value: number | null) {
   const mm = Math.floor(s / 60);
   const ss = s % 60;
   return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+}
+
+function toDateKey(value: string | Date | null | undefined) {
+  if (!value) return null;
+  const dt = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(dt.getTime())) return null;
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function formatDateKey(value: string | null | undefined) {
+  if (!value) return "—";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const [yyyy, mm, dd] = value.split("-");
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "—";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return "—";
+  return dt.toLocaleString("fr-FR");
+}
+
+function formatDurationMs(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return "—";
+  const ms = Math.max(0, Math.round(value));
+  if (ms < 1000) return `${ms} ms`;
+  return `${formatNumber(ms / 1000, 1)} s`;
+}
+
+function summarizeFixtureReportPayload(payload: Record<string, any> | null | undefined) {
+  if (!payload || typeof payload !== "object") return null;
+  const parts: string[] = [];
+
+  const updated = Number(payload.updated);
+  if (Number.isFinite(updated)) {
+    parts.push(`updated: ${formatNumber(updated)}`);
+  }
+
+  const refreshedCount = Number(payload.refreshedCount);
+  if (Number.isFinite(refreshedCount)) {
+    parts.push(`refreshed: ${formatNumber(refreshedCount)}`);
+  }
+
+  const errorCount = Number(payload.errorCount);
+  if (Number.isFinite(errorCount)) {
+    parts.push(`errors: ${formatNumber(errorCount)}`);
+  }
+
+  return parts.length ? parts.join(" • ") : null;
 }
 
 function toDatetimeLocalValue(iso: string | null | undefined) {
@@ -290,12 +372,103 @@ export default function AdminPage() {
   const [saving, setSaving] = useState(false);
 
   const [broadcasts, setBroadcasts] = useState<BroadcastRow[]>([]);
+  const [fixtureReports, setFixtureReports] = useState<FixtureReportRow[]>([]);
+  const [reportDateFilter, setReportDateFilter] = useState<string>(() => toDateKey(new Date()) ?? "");
 
   const hitRate = useMemo(() => {
     if (!picksResolved) return null;
     if (!picksHits && picksHits !== 0) return null;
     return (picksHits / picksResolved) * 100;
   }, [picksHits, picksResolved]);
+
+  const reportDays = useMemo<FixtureReportDayCard[]>(() => {
+    const grouped = new Map<
+      string,
+      {
+        total: number;
+        success: number;
+        errors: number;
+        durationSum: number;
+        durationCount: number;
+        jobs: Set<string>;
+        lastRunMs: number;
+      }
+    >();
+
+    fixtureReports.forEach((row) => {
+      const dateKey = toDateKey(row.created_at) ?? "Date inconnue";
+      const current = grouped.get(dateKey) ?? {
+        total: 0,
+        success: 0,
+        errors: 0,
+        durationSum: 0,
+        durationCount: 0,
+        jobs: new Set<string>(),
+        lastRunMs: 0,
+      };
+
+      current.total += 1;
+      if (String(row.status ?? "").toLowerCase() === "success") {
+        current.success += 1;
+      } else {
+        current.errors += 1;
+      }
+
+      const duration = Number(row.duration_ms);
+      if (Number.isFinite(duration) && duration >= 0) {
+        current.durationSum += duration;
+        current.durationCount += 1;
+      }
+
+      const createdAtMs = new Date(row.created_at ?? "").getTime();
+      if (Number.isFinite(createdAtMs)) {
+        current.lastRunMs = Math.max(current.lastRunMs, createdAtMs);
+      }
+
+      if (row.job_name) {
+        current.jobs.add(String(row.job_name));
+      }
+
+      grouped.set(dateKey, current);
+    });
+
+    return Array.from(grouped.entries())
+      .map(([dateKey, bucket]) => ({
+        dateKey,
+        total: bucket.total,
+        success: bucket.success,
+        errors: bucket.errors,
+        avgDurationMs: bucket.durationCount > 0 ? bucket.durationSum / bucket.durationCount : null,
+        jobsCount: bucket.jobs.size,
+        lastRunAt: bucket.lastRunMs ? new Date(bucket.lastRunMs).toISOString() : null,
+      }))
+      .sort((a, b) => {
+        if (a.dateKey === "Date inconnue") return 1;
+        if (b.dateKey === "Date inconnue") return -1;
+        return a.dateKey < b.dateKey ? 1 : -1;
+      });
+  }, [fixtureReports]);
+
+  const filteredFixtureReports = useMemo(() => {
+    if (!reportDateFilter) return fixtureReports;
+    return fixtureReports.filter((row) => toDateKey(row.created_at) === reportDateFilter);
+  }, [fixtureReports, reportDateFilter]);
+
+  const filteredReportSummary = useMemo(() => {
+    const total = filteredFixtureReports.length;
+    const success = filteredFixtureReports.filter(
+      (row) => String(row.status ?? "").toLowerCase() === "success"
+    ).length;
+    const errors = total - success;
+    const durationValues = filteredFixtureReports
+      .map((row) => Number(row.duration_ms))
+      .filter((value) => Number.isFinite(value) && value >= 0);
+    const avgDurationMs = durationValues.length
+      ? durationValues.reduce((sum, value) => sum + value, 0) / durationValues.length
+      : null;
+
+    return { total, success, errors, avgDurationMs };
+  }, [filteredFixtureReports]);
 
   const handleRefresh = async () => {
     setLoading(true);
@@ -508,6 +681,20 @@ export default function AdminPage() {
         console.warn("[admin] broadcasts load error:", broadcastsError);
       }
       setBroadcasts(Array.isArray(recentBroadcasts) ? (recentBroadcasts as BroadcastRow[]) : []);
+
+      const { data: reportsData, error: reportsError } = await supabaseBrowser
+        .from("app_fixture_update_reports")
+        .select("id,job_name,source,status,started_at,finished_at,duration_ms,payload,error,created_at")
+        .order("created_at", { ascending: false })
+        .limit(300);
+      if (reportsError) {
+        if (!isMissingTable(reportsError)) {
+          console.warn("[admin] fixture reports load error:", reportsError);
+        }
+        setFixtureReports([]);
+      } else {
+        setFixtureReports(Array.isArray(reportsData) ? (reportsData as FixtureReportRow[]) : []);
+      }
 
       setNotice("Dashboard mis à jour.");
     } catch (err: any) {
@@ -861,6 +1048,163 @@ export default function AdminPage() {
           ) : (
             <div className="mt-3 text-sm text-white/60">
               Pas encore de données (ou tables analytics non installées).
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="text-sm font-semibold">Logs auto • Fixtures</div>
+            <div className="text-xs text-white/60">
+              Rapports stockés en DB (`app_fixture_update_reports`) avec lecture par date.
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-xs text-white/60">
+              Date
+              <input
+                type="date"
+                value={reportDateFilter}
+                onChange={(e) => setReportDateFilter(e.target.value)}
+                className="mt-1 w-[150px] rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white outline-none"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => setReportDateFilter(toDateKey(new Date()) ?? "")}
+              className="mt-4 px-3 py-2 rounded-lg text-xs border border-white/15 bg-white/10 hover:bg-white/15"
+            >
+              Aujourd&apos;hui
+            </button>
+            <button
+              type="button"
+              onClick={() => setReportDateFilter("")}
+              className="mt-4 px-3 py-2 rounded-lg text-xs border border-white/15 bg-white/10 hover:bg-white/15"
+            >
+              Toutes dates
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+            <div className="text-xs text-white/60">Runs</div>
+            <div className="mt-1 text-xl font-bold">{formatNumber(filteredReportSummary.total)}</div>
+            <div className="mt-1 text-[11px] text-white/50">
+              {reportDateFilter ? formatDateKey(reportDateFilter) : "Toutes dates"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-emerald-400/20 bg-emerald-500/10 p-3">
+            <div className="text-xs text-emerald-100/80">Succès</div>
+            <div className="mt-1 text-xl font-bold text-emerald-100">
+              {formatNumber(filteredReportSummary.success)}
+            </div>
+            <div className="mt-1 text-[11px] text-emerald-100/70">status = success</div>
+          </div>
+          <div className="rounded-lg border border-red-400/20 bg-red-500/10 p-3">
+            <div className="text-xs text-red-100/80">Erreurs</div>
+            <div className="mt-1 text-xl font-bold text-red-100">
+              {formatNumber(filteredReportSummary.errors)}
+            </div>
+            <div className="mt-1 text-[11px] text-red-100/70">status != success</div>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+            <div className="text-xs text-white/60">Durée moyenne</div>
+            <div className="mt-1 text-xl font-bold">
+              {formatDurationMs(filteredReportSummary.avgDurationMs)}
+            </div>
+            <div className="mt-1 text-[11px] text-white/50">`duration_ms`</div>
+          </div>
+        </div>
+
+        {reportDays.length ? (
+          <div className="mt-3">
+            <div className="text-xs text-white/60">Cartes par date</div>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {reportDays.slice(0, 12).map((day) => {
+                const selected = reportDateFilter === day.dateKey;
+                return (
+                  <button
+                    key={day.dateKey}
+                    type="button"
+                    onClick={() => setReportDateFilter(day.dateKey)}
+                    className={`rounded-lg border px-3 py-2 text-left ${
+                      selected
+                        ? "border-sky-400/40 bg-sky-500/15"
+                        : "border-white/10 bg-black/20 hover:bg-black/30"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-xs font-semibold text-white">
+                        {formatDateKey(day.dateKey)}
+                      </div>
+                      <div className="text-[11px] text-white/60">{formatNumber(day.total)} run(s)</div>
+                    </div>
+                    <div className="mt-1 text-[11px] text-white/60">
+                      {formatNumber(day.success)} ok • {formatNumber(day.errors)} err •{" "}
+                      {formatNumber(day.jobsCount)} job(s)
+                    </div>
+                    <div className="mt-1 text-[11px] text-white/50">
+                      Dernier: {formatDateTime(day.lastRunAt)}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="mt-3 text-sm text-white/60">
+            Aucun log de fixture (table absente ou aucune exécution pour le moment).
+          </div>
+        )}
+
+        <div className="mt-3">
+          <div className="text-xs text-white/60">
+            Exécutions {reportDateFilter ? `du ${formatDateKey(reportDateFilter)}` : "(toutes dates)"}
+          </div>
+          {filteredFixtureReports.length ? (
+            <div className="mt-2 grid gap-2 max-h-[360px] overflow-auto pr-1">
+              {filteredFixtureReports.slice(0, 120).map((row) => {
+                const isSuccess = String(row.status ?? "").toLowerCase() === "success";
+                const payloadSummary = summarizeFixtureReportPayload(row.payload);
+                return (
+                  <div
+                    key={row.id}
+                    className="rounded-lg border border-white/10 bg-black/20 px-3 py-2"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`inline-flex rounded px-2 py-0.5 text-[10px] font-semibold border ${
+                          isSuccess
+                            ? "border-emerald-400/40 bg-emerald-500/20 text-emerald-100"
+                            : "border-red-400/40 bg-red-500/20 text-red-100"
+                        }`}
+                      >
+                        {isSuccess ? "SUCCESS" : "ERROR"}
+                      </span>
+                      <span className="text-xs font-semibold text-white">{row.job_name}</span>
+                      <span className="text-[11px] text-white/50">{formatDateTime(row.created_at)}</span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-white/60">
+                      {row.source} • durée: {formatDurationMs(row.duration_ms)}
+                    </div>
+                    {payloadSummary ? (
+                      <div className="mt-1 text-[11px] text-white/55">{payloadSummary}</div>
+                    ) : null}
+                    {row.error ? (
+                      <div className="mt-1 text-[11px] text-red-100/90 whitespace-pre-line">
+                        {row.error}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="mt-2 text-sm text-white/60">
+              Aucun log pour la date sélectionnée.
             </div>
           )}
         </div>

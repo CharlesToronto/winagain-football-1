@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import PicksChart from "./components/PicksChart";
 
@@ -9,6 +10,8 @@ type PickRow = {
   snapshot_date: string;
   fixture_date_utc: string | null;
   fixture_id: number;
+  home_team_id?: number | null;
+  away_team_id?: number | null;
   league_id: number | null;
   competition_name: string | null;
   competition_country?: string | null;
@@ -38,6 +41,20 @@ const oddsFilterOptions = [
   { key: "with_odds", label: "Odds ≥ 1.18" },
 ] as const;
 
+const algoOptions = [
+  { key: "v1", label: "Algo 1" },
+  { key: "v2", label: "Algo 2" },
+  { key: "v3", label: "Algo 3" },
+] as const;
+
+const competitionSortOptions = [
+  { key: "hits", label: "Hits" },
+  { key: "hit_rate", label: "Hit rate" },
+  { key: "avg_odd", label: "Cote moy" },
+] as const;
+
+type CompetitionSortKey = (typeof competitionSortOptions)[number]["key"];
+
   const marketOptions = [
     { key: "all", label: "Tous marchés" },
     { key: "over_under", label: "Over / Under" },
@@ -56,7 +73,7 @@ const MAX_COMBOS_COMPARE = 5;
 const COMBO_HISTORY_SNAPSHOTS = 30;
 const BASE_BANKROLL = 1000;
 const SINGLES_STAKE = 10;
-const COMBOS_STAKE = 50;
+const COMBOS_STAKE = 100;
 const MIN_ODDS_FILTER = 1.18;
 const DISCOURAGED_COMPETITIONS = new Set([
   "Bulgaria|||First League",
@@ -68,8 +85,14 @@ const DISCOURAGED_COMPETITIONS = new Set([
   "Belgium|||Challenger Pro League",
   "Hungary|||NB II",
   "Italy|||Serie C - Girone A",
+  "Italy|||Serie B",
+  "Israel|||Liga Leumit",
+  "Mexico|||Liga Premier Serie A",
+  "Poland|||I Liga",
+  "Azerbaijan|||Birinci Dasta",
   "Romania|||Liga I",
   "Serbia|||Super Liga",
+  "Slovakia|||Super Liga",
 ]);
 
 type Combo = {
@@ -100,12 +123,13 @@ export default function AlgoHistoryView({
   const [excludedMarkets, setExcludedMarkets] = useState<string[]>([]);
   const [excludedLines, setExcludedLines] = useState<string[]>([]);
   const [excludedPickCodes, setExcludedPickCodes] = useState<string[]>([]);
-  const algoVersion = "v3";
+  const [algoVersion, setAlgoVersion] = useState<"v1" | "v2" | "v3">("v3");
   const pathname = usePathname();
   const [criteria, setCriteria] = useState<"all" | "rose" | "yellow">("all");
   const [market, setMarket] = useState<
     "all" | "over_under" | "double_chance" | "1x2" | "btts" | "dnb" | "team_total"
   >("all");
+  const [competitionSortKey, setCompetitionSortKey] = useState<CompetitionSortKey>("hits");
   const [oddsFilter, setOddsFilter] = useState<"all" | "with_odds">("all");
   const [combosTab, setCombosTab] = useState<"history" | "compare">("history");
   const [combosCompareMode, setCombosCompareMode] = useState<"max5" | "legs7" | "legs9">("max5");
@@ -120,6 +144,27 @@ export default function AlgoHistoryView({
     params.set("v", String(refreshKey));
     return `/api/picks/history?${params.toString()}`;
   }, [criteria, market, days, refreshKey, algoVersion]);
+
+  const exportUrlBase = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set("algo", algoVersion);
+    params.set("days", String(days));
+    params.set("criteria", criteria);
+    if (market !== "all") params.set("market", market);
+    params.set("include_team_stats", "1");
+    return `/api/picks/export?${params.toString()}`;
+  }, [algoVersion, days, criteria, market]);
+
+  const downloadFullExport = (format: "csv" | "json") => {
+    const url = `${exportUrlBase}&format=${format}`;
+    const link = document.createElement("a");
+    const dateLabel = new Date().toISOString().slice(0, 10);
+    link.href = url;
+    link.download = `picks_${algoVersion}_${dateLabel}.${format}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const refresh = () => setRefreshKey(Date.now());
 
@@ -834,6 +879,28 @@ export default function AlgoHistoryView({
     return result.sort((a, b) => b.total - a.total);
   }, [displayItems]);
 
+  const competitionStatsSorted = useMemo(() => {
+    const rows = [...competitionStats];
+    if (competitionSortKey === "hits") {
+      rows.sort((a, b) => b.hits - a.hits || b.hitRate - a.hitRate || b.total - a.total);
+      return rows;
+    }
+    if (competitionSortKey === "hit_rate") {
+      rows.sort((a, b) => b.hitRate - a.hitRate || b.hits - a.hits || b.total - a.total);
+      return rows;
+    }
+    rows.sort((a, b) => b.avgOdd - a.avgOdd || b.hits - a.hits || b.total - a.total);
+    return rows;
+  }, [competitionStats, competitionSortKey]);
+
+  const competitionHitRateByKey = useMemo(() => {
+    const map = new Map<string, number>();
+    competitionStats.forEach((row) => {
+      map.set(`${row.country}|||${row.name}`, row.hitRate);
+    });
+    return map;
+  }, [competitionStats]);
+
   const activeCriteriaLabel = useMemo(
     () => criteriaOptions.find((option) => option.key === criteria)?.label ?? criteria,
     [criteria]
@@ -841,6 +908,10 @@ export default function AlgoHistoryView({
   const activeOddsFilterLabel = useMemo(
     () => oddsFilterOptions.find((option) => option.key === oddsFilter)?.label ?? oddsFilter,
     [oddsFilter]
+  );
+  const activeAlgoLabel = useMemo(
+    () => algoOptions.find((option) => option.key === algoVersion)?.label ?? algoVersion,
+    [algoVersion]
   );
 	  const activeMarketLabel = useMemo(
 	    () => marketOptions.find((option) => option.key === market)?.label ?? market,
@@ -870,6 +941,26 @@ export default function AlgoHistoryView({
 	    };
 	    return map[market] ?? activeMarketLabel;
 	  }, [market, activeMarketLabel]);
+
+  const CompetitionSortControls = ({ className = "" }: { className?: string }) => (
+    <div className={`mt-2 flex flex-wrap items-center gap-2 ${className}`}>
+      <span className="text-[11px] uppercase tracking-wide text-white/40">Trier ligues:</span>
+      {competitionSortOptions.map((option) => (
+        <button
+          key={`competition-sort-${option.key}`}
+          type="button"
+          onClick={() => setCompetitionSortKey(option.key)}
+          className={`px-2.5 py-1 rounded-md text-[11px] sm:text-xs transition ${
+            competitionSortKey === option.key
+              ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
+              : "bg-white/10 text-white/70 hover:bg-white/20"
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
 
   useEffect(() => {
     if (!showFiltersPanel) return;
@@ -1383,6 +1474,35 @@ export default function AlgoHistoryView({
   })();
   const compareVariantStats = compareVariant.stats;
 
+  type CompactComboStatCardProps = {
+    label: string;
+    value: ReactNode;
+    sub?: ReactNode;
+    sub2?: ReactNode;
+    valueClassName?: string;
+    className?: string;
+  };
+
+  const CompactComboStatCard = ({
+    label,
+    value,
+    sub,
+    sub2,
+    valueClassName = "text-white",
+    className = "",
+  }: CompactComboStatCardProps) => {
+    return (
+      <div className={`rounded-lg border border-white/10 bg-black/20 p-3 ${className}`}>
+        <div className="text-[10px] uppercase tracking-wide text-white/45">{label}</div>
+        <div className={`mt-1 text-xl leading-none font-semibold tabular-nums ${valueClassName}`}>
+          {value}
+        </div>
+        {sub ? <div className="mt-1 text-[11px] text-white/60">{sub}</div> : null}
+        {sub2 ? <div className="mt-0.5 text-[10px] text-white/45">{sub2}</div> : null}
+      </div>
+    );
+  };
+
   const OddsMinimumCard = ({ className = "" }: { className?: string }) => {
     const buckets = [
       { label: "≥ 1.30", pct: stats.odds130Pct, count: stats.odds130Count, hitRate: stats.odds130HitRate },
@@ -1556,6 +1676,7 @@ export default function AlgoHistoryView({
   const CompetitionsCard = ({ className = "" }: { className?: string }) => (
     <div className={`rounded-xl border border-white/10 bg-white/5 p-3 ${className}`}>
       <div className="text-xs text-white/60">Championnats (au moins 1 pick)</div>
+      <CompetitionSortControls />
       <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-white/10 bg-black/20">
         <div className="hidden sm:block">
           <div className="grid grid-cols-[1.4fr_80px_90px_90px_90px_90px] gap-3 px-3 py-2 text-[10px] uppercase tracking-wide text-white/40">
@@ -1567,7 +1688,7 @@ export default function AlgoHistoryView({
             <span className="text-right">Part</span>
           </div>
           <div className="divide-y divide-white/10 text-[12px] text-white/70">
-            {competitionStats.length ? (
+            {competitionStatsSorted.length ? (
               <>
                 <div className="grid grid-cols-[1.4fr_80px_90px_90px_90px_90px] items-center gap-3 px-3 py-2 text-white/80">
                   <span className="truncate font-semibold">TOTAL / MOYENNE</span>
@@ -1586,7 +1707,7 @@ export default function AlgoHistoryView({
                     {competitionSummary.avgPicks.toFixed(1)}
                   </span>
                 </div>
-                {competitionStats.map((row) => {
+                {competitionStatsSorted.map((row) => {
                   const isDiscouraged = DISCOURAGED_COMPETITIONS.has(
                     `${row.country}|||${row.name}`
                   );
@@ -1644,7 +1765,7 @@ export default function AlgoHistoryView({
         </div>
 
         <div className="sm:hidden divide-y divide-white/10 text-[12px] text-white/70">
-          {competitionStats.length ? (
+          {competitionStatsSorted.length ? (
             <>
               <div className="px-3 py-2 text-white/80">
                 <div className="flex items-center justify-between gap-3">
@@ -1663,7 +1784,7 @@ export default function AlgoHistoryView({
                   <span className="tabular-nums">Picks {competitionSummary.totalPicks}</span>
                 </div>
               </div>
-              {competitionStats.map((row) => {
+              {competitionStatsSorted.map((row) => {
                 const isDiscouraged = DISCOURAGED_COMPETITIONS.has(`${row.country}|||${row.name}`);
                 return (
                   <div
@@ -1850,16 +1971,22 @@ export default function AlgoHistoryView({
 	      >
 	        <div className="flex items-start sm:items-center gap-3">
 	          <div className="min-w-0 flex-1">
-	            <div className="hidden sm:block text-sm text-white/70">
-	              <span className="text-white/40">Filtres :</span>{" "}
-	              <span className="text-white/80">{activeCriteriaLabel}</span>
-	              <span className="text-white/35"> • </span>
-	              <span className="text-white/80">{activeOddsFilterLabel}</span>
-	              <span className="text-white/35"> • </span>
-	              <span className="text-white/80">{activeMarketLabel}</span>
-	              <span className="text-white/35"> • </span>
-	              <span className="text-white/60">Tous les jours</span>
-	            </div>
+		            <div className="hidden sm:block text-sm text-white/70">
+		              <span className="text-white/40">Filtres :</span>{" "}
+		              <span className="text-white/80">{activeCriteriaLabel}</span>
+		              <span className="text-white/35"> • </span>
+		              <span className="text-white/80">{activeOddsFilterLabel}</span>
+		              <span className="text-white/35"> • </span>
+		              <span className="text-white/80">{activeMarketLabel}</span>
+		              {view === "singles" ? (
+		                <>
+		                  <span className="text-white/35"> • </span>
+		                  <span className="text-white/80">{activeAlgoLabel}</span>
+		                </>
+		              ) : null}
+		              <span className="text-white/35"> • </span>
+		              <span className="text-white/60">Tous les jours</span>
+		            </div>
 	            <div className="sm:hidden">
 	              <div className="text-[10px] uppercase tracking-wide text-white/45">
 	                Filtres
@@ -1898,6 +2025,22 @@ export default function AlgoHistoryView({
 	          <div className="flex items-center gap-2 shrink-0">
 	            <button
 	              type="button"
+	              onClick={() => downloadFullExport("csv")}
+	              className="px-2.5 py-1 rounded-lg text-xs sm:px-3 sm:text-sm bg-white/10 text-white/80 hover:bg-white/20 transition"
+	              title="Télécharger tous les picks avec historique team_stats (CSV)"
+	            >
+	              Export CSV
+	            </button>
+	            <button
+	              type="button"
+	              onClick={() => downloadFullExport("json")}
+	              className="px-2.5 py-1 rounded-lg text-xs sm:px-3 sm:text-sm bg-white/10 text-white/80 hover:bg-white/20 transition"
+	              title="Télécharger tous les picks avec historique team_stats (JSON)"
+	            >
+	              Export JSON
+	            </button>
+	            <button
+	              type="button"
 	              onClick={() => setShowFiltersPanel((value) => !value)}
 	              aria-expanded={showFiltersPanel}
 	              aria-controls="filters-panel"
@@ -1923,14 +2066,36 @@ export default function AlgoHistoryView({
 	              <span className="hidden sm:inline">Rafraîchir</span>
 	            </button>
 	          </div>
-	        </div>
+		        </div>
 
-        {showFiltersPanel ? (
-          <div id="filters-panel" className="mt-3 border-t border-white/10 pt-3">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div>
-                <div className="text-xs uppercase tracking-wide text-white/40">Critère</div>
-                <div className="mt-2 flex flex-wrap gap-2">
+            {view === "singles" ? (
+              <div className="mt-2 border-t border-white/10 pt-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] uppercase tracking-wide text-white/40">Algorithme</span>
+                  {algoOptions.map((option) => (
+                    <button
+                      key={`algo-switch-${option.key}`}
+                      type="button"
+                      onClick={() => setAlgoVersion(option.key)}
+                      className={`px-3 py-1 rounded-lg text-xs sm:text-sm transition ${
+                        algoVersion === option.key
+                          ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
+                          : "bg-white/10 text-white/70 hover:bg-white/20"
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+	        {showFiltersPanel ? (
+	          <div id="filters-panel" className="mt-3 border-t border-white/10 pt-3">
+	            <div className={`grid grid-cols-1 gap-4 ${view === "singles" ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
+	              <div>
+	                <div className="text-xs uppercase tracking-wide text-white/40">Critère</div>
+	                <div className="mt-2 flex flex-wrap gap-2">
                   {criteriaOptions.map((option) => (
                     <button
                       key={`panel-criteria-${option.key}`}
@@ -1985,9 +2150,31 @@ export default function AlgoHistoryView({
                       {option.label}
                     </button>
                   ))}
-                </div>
-              </div>
-            </div>
+	                </div>
+	              </div>
+
+                {view === "singles" ? (
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-white/40">Algorithme</div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {algoOptions.map((option) => (
+                        <button
+                          key={`panel-algo-${option.key}`}
+                          type="button"
+                          onClick={() => setAlgoVersion(option.key)}
+                          className={`px-3 py-1 rounded-lg text-sm transition ${
+                            algoVersion === option.key
+                              ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
+                              : "bg-white/10 text-white/70 hover:bg-white/20"
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+	            </div>
 
             <div className="mt-4 flex items-center justify-between gap-3">
               <button
@@ -2083,10 +2270,11 @@ export default function AlgoHistoryView({
 
 			            {showMarketExclusions ? <MarketExclusionsCard className="sm:hidden" /> : null}
 
-				      <div className="hidden sm:block rounded-xl border border-white/10 bg-white/5 p-3">
-					          <div className="text-xs text-white/60">Championnats (au moins 1 pick)</div>
-					          <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-white/10 bg-black/20">
-	                    <div className="hidden sm:block">
+					      <div className="hidden sm:block rounded-xl border border-white/10 bg-white/5 p-3">
+						          <div className="text-xs text-white/60">Championnats (au moins 1 pick)</div>
+                      <CompetitionSortControls />
+						          <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-white/10 bg-black/20">
+		                    <div className="hidden sm:block">
 			              <div className="grid grid-cols-[1.4fr_80px_90px_90px_90px_90px] gap-3 px-3 py-2 text-[10px] uppercase tracking-wide text-white/40">
 			                <span>Championnat</span>
 			                <span className="text-right">Cote moy</span>
@@ -2096,7 +2284,7 @@ export default function AlgoHistoryView({
 			                <span className="text-right">Part</span>
 			              </div>
 			              <div className="divide-y divide-white/10 text-[12px] text-white/70">
-			                {competitionStats.length ? (
+				                {competitionStatsSorted.length ? (
 			                  <>
 			                    <div className="grid grid-cols-[1.4fr_80px_90px_90px_90px_90px] items-center gap-3 px-3 py-2 text-white/80">
 			                      <span className="truncate font-semibold">TOTAL / MOYENNE</span>
@@ -2117,7 +2305,7 @@ export default function AlgoHistoryView({
 			                        {competitionSummary.avgPicks.toFixed(1)}
 			                      </span>
 			                    </div>
-			                    {competitionStats.map((row) => {
+				                    {competitionStatsSorted.map((row) => {
 			                      const isDiscouraged = DISCOURAGED_COMPETITIONS.has(
 			                        `${row.country}|||${row.name}`
 			                      );
@@ -2174,7 +2362,7 @@ export default function AlgoHistoryView({
 			              </div>
                     </div>
                     <div className="sm:hidden divide-y divide-white/10 text-[12px] text-white/70">
-                      {competitionStats.length ? (
+		                      {competitionStatsSorted.length ? (
                         <>
                           <div className="px-3 py-2 text-white/80">
                             <div className="flex items-center justify-between gap-3">
@@ -2193,7 +2381,7 @@ export default function AlgoHistoryView({
                               <span className="tabular-nums">Picks {competitionSummary.totalPicks}</span>
                             </div>
                           </div>
-                          {competitionStats.map((row) => {
+                          {competitionStatsSorted.map((row) => {
                             const isDiscouraged = DISCOURAGED_COMPETITIONS.has(
                               `${row.country}|||${row.name}`
                             );
@@ -2399,16 +2587,45 @@ export default function AlgoHistoryView({
                       </span>
                     </div>
                     <div className="space-y-2 text-xs text-white/80">
-                      {combo.legs.map((leg) => (
-                        <div key={leg.id} className="flex items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate">
-                              {leg.home_name ?? "Home"} vs {leg.away_name ?? "Away"}
-                            </div>
-                            <div className="text-white/50">
-                              {leg.pick} • {leg.odd ?? "-"}
-                            </div>
-                          </div>
+	                      {combo.legs.map((leg) => {
+                          const leagueCountry = leg.competition_country ?? "Inconnu";
+                          const leagueName = leg.competition_name ?? "Competition";
+                          const leagueHitRate =
+                            competitionHitRateByKey.get(`${leagueCountry}|||${leagueName}`) ?? null;
+                          return (
+	                        <div key={leg.id} className="flex items-center justify-between gap-3">
+	                          <div className="min-w-0">
+	                            <div className="truncate">
+	                              {Number.isFinite(leg.home_team_id) && (leg.home_team_id ?? 0) > 0 ? (
+	                                <Link
+	                                  href={`/team/${leg.home_team_id}`}
+	                                  className="text-cyan-200 hover:underline"
+	                                >
+	                                  {leg.home_name ?? "Home"}
+	                                </Link>
+	                              ) : (
+	                                <>{leg.home_name ?? "Home"}</>
+	                              )}{" "}
+	                              vs{" "}
+	                              {Number.isFinite(leg.away_team_id) && (leg.away_team_id ?? 0) > 0 ? (
+	                                <Link
+	                                  href={`/team/${leg.away_team_id}`}
+	                                  className="text-cyan-200 hover:underline"
+	                                >
+	                                  {leg.away_name ?? "Away"}
+	                                </Link>
+	                              ) : (
+	                                <>{leg.away_name ?? "Away"}</>
+	                              )}
+	                            </div>
+	                            <div className="text-white/50">
+	                              {leg.pick} • {leg.odd ?? "-"}
+	                            </div>
+	                            <div className="text-[11px] text-white/45 truncate">
+                                  {leagueCountry} - {leagueName} • Hit{" "}
+                                  {leagueHitRate == null ? "-" : `${leagueHitRate.toFixed(1)}%`}
+	                            </div>
+	                          </div>
                           <div
                             className={`px-2 py-0.5 rounded-md text-[11px] ${
                               leg.meets_criteria
@@ -2418,9 +2635,9 @@ export default function AlgoHistoryView({
                           >
                             {leg.meets_criteria ? "Rose" : "Jaune"}
                           </div>
-                        </div>
-                      ))}
-                    </div>
+	                        </div>
+	                      )})}
+	                    </div>
                   </div>
                 ))}
               </div>
@@ -2681,96 +2898,92 @@ export default function AlgoHistoryView({
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-                <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-white/60">Total combinés</div>
-                  <div className="text-2xl font-semibold">{combosHistoryStats.total}</div>
-                  <div className="mt-2 text-xs text-white/60">
-                    <span className="text-emerald-300">{combosHistoryStats.hits} hit</span>
-                    <span className="text-white/50"> • </span>
-                    <span className="text-rose-300">{combosHistoryStats.misses} miss</span>
-                    <span className="text-white/50"> • </span>
-                    {combosHistoryStats.hitRate.toFixed(1)}%
-                  </div>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-white/60">ROI combinés</div>
-                  <div
-                    className={`text-2xl font-semibold ${
-                      combosHistoryStats.roiPct >= 0 ? "text-emerald-200" : "text-rose-300"
-                    }`}
-                  >
-                    {combosHistoryStats.roiPct.toFixed(1)}%
-                  </div>
-                  <div className="mt-2 text-xs text-white/60">
-                    Base {BASE_BANKROLL}$ • Mise {COMBOS_STAKE}$
-                  </div>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-white/60">Cote moyenne (combinés)</div>
-                  <div className="text-2xl font-semibold">{combosHistoryStats.avgOdd.toFixed(2)}</div>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-white/60">Matchs (combinés)</div>
-                  <div className="text-2xl font-semibold">{combosHistoryStats.totalLegs}</div>
-                  <div className="mt-2 text-xs text-white/60">
-                    Uniques: {combosHistoryStats.uniqueFixtures} • Moy:{" "}
-                    {combosHistoryStats.avgLegsPerCombo.toFixed(2)}
-                  </div>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-white/60">Ratio Jaune / Rose</div>
-                  <div className="text-2xl font-semibold">
-                    {combosHistoryStats.yellowLegsPct.toFixed(0)}% /{" "}
-                    {combosHistoryStats.roseLegsPct.toFixed(0)}%
-                  </div>
-                  <div className="mt-2 text-xs text-white/60">
-                    Jaune: {combosHistoryStats.yellowLegs} • Rose: {combosHistoryStats.roseLegs}
-                  </div>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-white/60">Matchs (snapshots)</div>
-                  <div className="text-2xl font-semibold">
-                    {combosHistorySnapshotsStats.totalCandidates}
-                  </div>
-                  <div className="mt-2 text-xs text-white/60">
-                    Snapshots: {combosHistorySnapshotsStats.snapshots} • Uniques:{" "}
-                    {combosHistorySnapshotsStats.uniqueFixtures}
-                  </div>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-white/60">Drawdown max</div>
-                  <div className="text-2xl font-semibold text-rose-300">
-                    -{combosHistoryStats.maxDrawdownPct.toFixed(1)}%
-                  </div>
-                  <div className="mt-2 text-xs text-white/60">
-                    -{combosHistoryStats.maxDrawdownValue.toFixed(0)}$
-                  </div>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs text-white/60">
-                    Simulation tous doubles hors blacklist (cote ≥ {MIN_COMBO_ODDS.toFixed(2)})
-                  </div>
-                  <div className="text-2xl font-semibold">
-                    <span className="text-emerald-300">{combosHistoryAllStats.hits}</span>
-                    <span className="text-white/50"> / </span>
-                    <span className="text-rose-300">{combosHistoryAllStats.misses}</span>
-                  </div>
-                  <div className="mt-2 text-xs text-white/60">
-                    Résolus: {combosHistoryAllStats.resolved} / {combosHistoryAllStats.total} •{" "}
-                    {combosHistoryAllStats.hitRate.toFixed(1)}%
-                  </div>
-                  <div className="mt-1 text-[11px] text-white/45">
-                    Cote moy: {combosHistoryAllStats.avgOdd.toFixed(2)} • ROI:{" "}
-                    <span
-                      className={
-                        combosHistoryAllStats.roiPct >= 0 ? "text-emerald-200" : "text-rose-200"
-                      }
-                    >
-                      {combosHistoryAllStats.roiPct.toFixed(1)}%
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-2 sm:gap-3">
+                <CompactComboStatCard
+                  label="Total combinés"
+                  value={combosHistoryStats.total}
+                  sub={
+                    <>
+                      <span className="text-emerald-300">{combosHistoryStats.hits} hit</span>
+                      <span className="text-white/40"> • </span>
+                      <span className="text-rose-300">{combosHistoryStats.misses} miss</span>
+                      <span className="text-white/40"> • </span>
+                      {combosHistoryStats.hitRate.toFixed(1)}%
+                    </>
+                  }
+                />
+                <CompactComboStatCard
+                  label="Bénéfice"
+                  value={
+                    <span className="inline-flex items-baseline gap-2">
+                      <span>{formatSigned(combosHistoryStats.profit, 0, "$")}</span>
+                      <span className="text-sm text-white/60">
+                        ({formatSigned(combosHistoryStats.roiPct, 1, "%")})
+                      </span>
                     </span>
-                  </div>
-                </div>
+                  }
+                  valueClassName={
+                    combosHistoryStats.profit >= 0 ? "text-emerald-200" : "text-rose-300"
+                  }
+                  sub={`Capital final: ${combosHistoryStats.finalCapital.toFixed(0)}$`}
+                />
+                <CompactComboStatCard
+                  label="ROI combinés"
+                  value={`${combosHistoryStats.roiPct.toFixed(1)}%`}
+                  valueClassName={
+                    combosHistoryStats.roiPct >= 0 ? "text-emerald-200" : "text-rose-300"
+                  }
+                  sub={`Base ${BASE_BANKROLL}$ • Mise ${COMBOS_STAKE}$`}
+                />
+                <CompactComboStatCard
+                  label="Cote moyenne"
+                  value={combosHistoryStats.avgOdd.toFixed(2)}
+                />
+                <CompactComboStatCard
+                  label="Matchs (combinés)"
+                  value={combosHistoryStats.totalLegs}
+                  sub={`Uniques: ${combosHistoryStats.uniqueFixtures} • Moy: ${combosHistoryStats.avgLegsPerCombo.toFixed(2)}`}
+                />
+                <CompactComboStatCard
+                  label="Ratio Jaune / Rose"
+                  value={`${combosHistoryStats.yellowLegsPct.toFixed(0)}% / ${combosHistoryStats.roseLegsPct.toFixed(0)}%`}
+                  sub={`Jaune: ${combosHistoryStats.yellowLegs} • Rose: ${combosHistoryStats.roseLegs}`}
+                />
+                <CompactComboStatCard
+                  label="Matchs (snapshots)"
+                  value={combosHistorySnapshotsStats.totalCandidates}
+                  sub={`Snapshots: ${combosHistorySnapshotsStats.snapshots} • Uniques: ${combosHistorySnapshotsStats.uniqueFixtures}`}
+                />
+                <CompactComboStatCard
+                  label="Drawdown max"
+                  value={`-${combosHistoryStats.maxDrawdownPct.toFixed(1)}%`}
+                  valueClassName="text-rose-300"
+                  sub={`-${combosHistoryStats.maxDrawdownValue.toFixed(0)}$`}
+                />
+                <CompactComboStatCard
+                  label={`Sim. doubles ≥ ${MIN_COMBO_ODDS.toFixed(2)}`}
+                  className="col-span-2 md:col-span-3 xl:col-span-2"
+                  value={
+                    <>
+                      <span className="text-emerald-300">{combosHistoryAllStats.hits}</span>
+                      <span className="text-white/45"> / </span>
+                      <span className="text-rose-300">{combosHistoryAllStats.misses}</span>
+                    </>
+                  }
+                  sub={`Résolus: ${combosHistoryAllStats.resolved} / ${combosHistoryAllStats.total} • ${combosHistoryAllStats.hitRate.toFixed(1)}%`}
+                  sub2={
+                    <>
+                      Cote moy: {combosHistoryAllStats.avgOdd.toFixed(2)} • ROI:{" "}
+                      <span
+                        className={
+                          combosHistoryAllStats.roiPct >= 0 ? "text-emerald-200" : "text-rose-200"
+                        }
+                      >
+                        {combosHistoryAllStats.roiPct.toFixed(1)}%
+                      </span>
+                    </>
+                  }
+                />
               </div>
 
               {combosHistoryStats.points.length ? (

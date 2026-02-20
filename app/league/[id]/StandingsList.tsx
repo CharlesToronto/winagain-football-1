@@ -67,11 +67,24 @@ export default function StandingsList({
         const formRaw = typeof row.form === "string" ? row.form.toUpperCase() : "";
         const formClean = formRaw.replace(/[^WDL]/g, "");
         const lastFive = formClean.slice(-5);
-        const formCounts = {
-          W: lastFive.split("").filter((c) => c === "W").length,
-          D: lastFive.split("").filter((c) => c === "D").length,
-          L: lastFive.split("").filter((c) => c === "L").length,
-        };
+        const playedValue = Number(row.all?.played);
+        const played = Number.isFinite(playedValue) ? playedValue : null;
+        const winValue = Number(row.all?.win);
+        const drawValue = Number(row.all?.draw);
+        const lossValue = Number(row.all?.lose);
+        let wins = Number.isFinite(winValue) ? winValue : null;
+        let draws = Number.isFinite(drawValue) ? drawValue : null;
+        let losses = Number.isFinite(lossValue) ? lossValue : null;
+        if (played != null) {
+          if (wins != null && draws != null) {
+            losses = Math.max(0, played - wins - draws);
+          } else if (wins != null && losses != null) {
+            draws = Math.max(0, played - wins - losses);
+          } else if (draws != null && losses != null) {
+            wins = Math.max(0, played - draws - losses);
+          }
+        }
+        const standingsCounts = { W: wins, D: draws, L: losses };
 
         const formIcons = lastFive
           ? lastFive.split("").map((result, idx) => (
@@ -133,14 +146,14 @@ export default function StandingsList({
                   {formIcons ?? <span className="text-white/40">--</span>}
                 </div>
                 <div className="grid grid-cols-3 gap-2 min-w-[72px] text-right">
-                  <span className={lastFive ? "" : "text-white/40"}>
-                    {lastFive ? formCounts.W : "--"}
+                  <span className={standingsCounts.W != null ? "" : "text-white/40"}>
+                    {standingsCounts.W != null ? standingsCounts.W : "--"}
                   </span>
-                  <span className={lastFive ? "" : "text-white/40"}>
-                    {lastFive ? formCounts.D : "--"}
+                  <span className={standingsCounts.D != null ? "" : "text-white/40"}>
+                    {standingsCounts.D != null ? standingsCounts.D : "--"}
                   </span>
-                  <span className={lastFive ? "" : "text-white/40"}>
-                    {lastFive ? formCounts.L : "--"}
+                  <span className={standingsCounts.L != null ? "" : "text-white/40"}>
+                    {standingsCounts.L != null ? standingsCounts.L : "--"}
                   </span>
                 </div>
               </div>

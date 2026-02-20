@@ -37,12 +37,12 @@ export default function nextConfig(phase) {
   if (isVercel) return baseConfig;
 
   // Prevent "next build/start" from corrupting a running "next dev" by separating dist dirs.
-  // Keep dev on the default `.next` (dev server assumes this for static assets).
+  // Use a dedicated dev dir too, so cached manifests/assets don't bleed between modes.
   if (phase === PHASE_PRODUCTION_BUILD || phase === PHASE_PRODUCTION_SERVER) {
     return { ...baseConfig, distDir: ".next-build" };
   }
   if (phase === PHASE_DEVELOPMENT_SERVER) {
-    return baseConfig;
+    return { ...baseConfig, distDir: ".next-dev" };
   }
   return baseConfig;
 }

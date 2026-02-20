@@ -25,21 +25,21 @@ export const navItems = [
   },
   { name: "Chat", href: "/chat", icon: IconMessage },
   {
-    name: "Admin",
-    href: "/admin",
-    icon: IconSettings,
-    children: [
-      { name: "Dashboard", href: "/admin", icon: IconSettings },
-      { name: "Admin Data", href: "/admin-data", icon: IconDatabase },
-    ],
-  },
-  {
     name: "Users",
     href: "/users",
     icon: IconUsers,
     children: [
       { name: "Profil", href: "/users", icon: IconUsers },
       { name: "Bankroll", href: "/bankroll", icon: IconWallet },
+    ],
+  },
+  {
+    name: "Admin",
+    href: "/admin",
+    icon: IconSettings,
+    children: [
+      { name: "Dashboard", href: "/admin", icon: IconSettings },
+      { name: "Admin Data", href: "/admin-data", icon: IconDatabase },
     ],
   },
 ];

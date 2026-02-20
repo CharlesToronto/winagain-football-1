@@ -1,6 +1,7 @@
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { refreshFixturesWindow } from "@/lib/fixtures/refreshFixturesWindow";
+import { writeFixtureUpdateReport } from "@/lib/fixtures/reporting";
+import RencontreClientView from "./components/RencontreClientView";
 
 export const dynamic = "force-dynamic";
 
@@ -196,14 +197,51 @@ export default async function RencontrePage({
 
   const supabase = createClient();
 
+  const refreshStartedAt = Date.now();
+  const refreshStartedAtIso = new Date(refreshStartedAt).toISOString();
   try {
-    await refreshFixturesWindow(supabase as any, {
+    const refreshResult = await refreshFixturesWindow(supabase as any, {
       dateKeys: [yesterdayKey, todayKey, tomorrowKey],
       ttlMinutes: 5,
       timeZone: TIMEZONE,
     });
+
+    const reports = refreshResult.reports ?? [];
+    const refreshedCount = reports.filter((report) => report.refreshed).length;
+    const errorCount = reports.filter((report) => Boolean(report.error)).length;
+    if (refreshedCount > 0 || errorCount > 0) {
+      await writeFixtureUpdateReport(supabase as any, {
+        jobName: "page_rencontre_fixtures_window",
+        source: "page:/rencontre",
+        status: errorCount > 0 ? "error" : "success",
+        startedAt: refreshStartedAtIso,
+        durationMs: Date.now() - refreshStartedAt,
+        payload: {
+          dateKeys: [yesterdayKey, todayKey, tomorrowKey],
+          ttlMinutes: 5,
+          timeZone: TIMEZONE,
+          refreshedCount,
+          errorCount,
+          reports,
+        },
+        error: errorCount > 0 ? `refreshFixturesWindow reported ${errorCount} error(s).` : null,
+      });
+    }
   } catch (err) {
     console.error("Rencontre fixtures refresh failed", err);
+    await writeFixtureUpdateReport(supabase as any, {
+      jobName: "page_rencontre_fixtures_window",
+      source: "page:/rencontre",
+      status: "error",
+      startedAt: refreshStartedAtIso,
+      durationMs: Date.now() - refreshStartedAt,
+      payload: {
+        dateKeys: [yesterdayKey, todayKey, tomorrowKey],
+        ttlMinutes: 5,
+        timeZone: TIMEZONE,
+      },
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   const { data, error } = await supabase
@@ -271,25 +309,30 @@ export default async function RencontrePage({
     });
   }
 
-  const leagueHistoryStats = new Map<number, { total: number; hits: number; hitRate: number }>();
+  const leagueHistoryStats = new Map<number, { resolved: number; hits: number; hitRate: number }>();
   if (competitionIds.length > 0) {
     const { data: leagueRows, error: leagueError } = await supabase
       .from("daily_algo_picks_v3")
       .select("league_id,status")
-      .in("league_id", competitionIds);
+      .in("league_id", competitionIds)
+      .in("status", ["hit", "miss"]);
 
     if (!leagueError) {
       (leagueRows ?? []).forEach((row: LeagueHistoryRow) => {
         const leagueId = Number(row?.league_id);
         if (!Number.isFinite(leagueId) || !leagueId) return;
-        const current = leagueHistoryStats.get(leagueId) ?? { total: 0, hits: 0, hitRate: 0 };
-        current.total += 1;
+        const current = leagueHistoryStats.get(leagueId) ?? {
+          resolved: 0,
+          hits: 0,
+          hitRate: 0,
+        };
+        current.resolved += 1;
         if (row?.status === "hit") current.hits += 1;
         leagueHistoryStats.set(leagueId, current);
       });
 
       leagueHistoryStats.forEach((value) => {
-        value.hitRate = value.total ? (value.hits / value.total) * 100 : 0;
+        value.hitRate = value.resolved ? (value.hits / value.resolved) * 100 : 0;
       });
     }
   }
@@ -377,200 +420,58 @@ export default async function RencontrePage({
   const todayHref = activeDay === "today" ? "/rencontre" : "/rencontre?day=today";
   const tomorrowHref =
     activeDay === "tomorrow" ? "/rencontre" : "/rencontre?day=tomorrow";
+  const sectionsData = sections.map((section) => {
+    const groups = sectionData(section.key).map((group) => {
+      const competitionLabel = formatCompetitionLabel(group.competition);
+      const roundLabels = group.fixtures
+        .map((fixture) => fixture.round)
+        .filter(Boolean) as string[];
+      const uniqueRounds = Array.from(new Set(roundLabels));
+      const competitionRound = uniqueRounds.length === 1 ? uniqueRounds[0] : null;
+      const leagueStats = leagueHistoryStats.get(group.competition.id) ?? null;
+      const fixturesData = group.fixtures.map((fixture) => {
+        const homeHref = Number.isFinite(fixture.home?.id) ? `/team/${fixture.home?.id}` : null;
+        const roundLabel =
+          fixture.round && fixture.round === competitionRound
+            ? null
+            : fixture.round ?? "Marché -3.5";
+        const hasScore = fixture.goals_home != null && fixture.goals_away != null;
+        return {
+          id: fixture.id,
+          timeLabel: formatTime(fixture.date_utc),
+          roundLabel,
+          hasScore,
+          goalsHome: fixture.goals_home ?? null,
+          goalsAway: fixture.goals_away ?? null,
+          home: fixture.home ?? null,
+          away: fixture.away ?? null,
+          homeHref,
+        };
+      });
+      return {
+        anchorId: `league-${section.key}-${group.competition.id}-${activeDay}`,
+        competition: group.competition,
+        competitionLabel,
+        competitionRound,
+        leagueStats,
+        fixtures: fixturesData,
+      };
+    });
+    return {
+      key: section.key,
+      title: section.title,
+      groups,
+    };
+  });
 
   return (
-    <div className="min-h-screen p-6 text-white">
-      <div className="flex items-center gap-2 mb-6">
-        <Link
-          href={yesterdayHref}
-          className={`px-3 py-1 rounded-lg text-sm transition ${
-            activeDay === "yesterday"
-              ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
-              : "bg-white/10 text-white/70 hover:bg-white/20"
-          }`}
-        >
-          Hier
-        </Link>
-        <Link
-          href={todayHref}
-          className={`px-3 py-1 rounded-lg text-sm transition ${
-            activeDay === "today"
-              ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
-              : "bg-white/10 text-white/70 hover:bg-white/20"
-          }`}
-        >
-          Aujourd'hui
-        </Link>
-        <Link
-          href={tomorrowHref}
-          className={`px-3 py-1 rounded-lg text-sm transition ${
-            activeDay === "tomorrow"
-              ? "bg-gradient-to-br from-green-500 via-emerald-500 to-lime-500 text-white"
-              : "bg-white/10 text-white/70 hover:bg-white/20"
-          }`}
-        >
-          Demain
-        </Link>
-      </div>
-
-      {error ? (
-        <div className="p-4 rounded-lg bg-red-500/20 border border-red-500/40 text-red-100">
-          Erreur chargement rencontres.
-        </div>
-      ) : null}
-
-      <div className="space-y-8">
-        {sections.map((section) => {
-          const groups = sectionData(section.key);
-          return (
-            <div key={section.key} className="space-y-4">
-              <div className="sr-only">{section.title}</div>
-              {groups.length === 0 ? (
-                <div className="text-sm text-white/60">Aucun match prévu.</div>
-              ) : (
-                <div className="space-y-4">
-                  {groups.map((group) => {
-                    const competitionLabel = formatCompetitionLabel(group.competition);
-                    const roundLabels = group.fixtures
-                      .map((fixture) => fixture.round)
-                      .filter(Boolean) as string[];
-                    const uniqueRounds = Array.from(new Set(roundLabels));
-                    const competitionRound =
-                      uniqueRounds.length === 1 ? uniqueRounds[0] : null;
-                    const leagueStats = leagueHistoryStats.get(group.competition.id);
-                    return (
-                      <details
-                        key={`competition-${section.key}-${group.competition.id}-${activeDay}`}
-                        className="group -mx-4 px-2 rounded-xl bg-transparent"
-                      >
-                        <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none rounded-xl border border-white/20 bg-gradient-to-br from-white/10 via-white/5 to-white/10 backdrop-blur-sm group-open:border-transparent group-open:bg-transparent text-[11px]">
-                          {group.competition.logo ? (
-                            <img
-                              src={group.competition.logo}
-                              alt={competitionLabel}
-                              className="w-8 h-8 rounded-md object-contain bg-white/10"
-                            />
-                          ) : (
-                            <div className="w-8 h-8 rounded-md bg-white/10 border border-white/10" />
-                          )}
-                          <div className="min-w-0 flex-1">
-                            <div className="font-semibold truncate text-[12px]">{competitionLabel}</div>
-                            <div className="text-[10px] text-white/60 flex items-center gap-2">
-                              <span>{group.fixtures.length} matchs</span>
-                              {leagueStats?.total ? (
-                                <>
-                                  <span className="text-white/40">•</span>
-                                  <span className="tabular-nums text-[11px] font-medium">
-                                    Hit rate {leagueStats.hitRate.toFixed(1)}% • {leagueStats.total} picks
-                                  </span>
-                                </>
-                              ) : null}
-                              {competitionRound ? (
-                                <>
-                                  <span className="text-white/40">•</span>
-                                  <span className="truncate">{competitionRound}</span>
-                                </>
-                              ) : null}
-                            </div>
-                          </div>
-                          <span className="text-white/50 transition-transform group-open:rotate-180 animate-pulse group-open:animate-none motion-reduce:animate-none">
-                            <svg
-                              viewBox="0 0 24 24"
-                              width={16}
-                              height={16}
-                              aria-hidden
-                            >
-                              <path
-                                d="M6 9l6 6 6-6"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="1.5"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
-                            </svg>
-                          </span>
-                        </summary>
-
-                        <div className="-mx-4 px-2 pb-4 space-y-2">
-                          {group.fixtures.map((fixture) => {
-                            const homeHref = Number.isFinite(fixture.home?.id)
-                              ? `/team/${fixture.home?.id}`
-                              : null;
-                            const roundLabel =
-                              fixture.round && fixture.round === competitionRound
-                                ? null
-                                : fixture.round ?? "Marché -3.5";
-                            const hasScore =
-                              fixture.goals_home != null && fixture.goals_away != null;
-                            const row = (
-                              <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 transition hover:bg-white/10">
-                                <div className="flex items-center justify-between text-[10px] text-white/60">
-                                  <span>{formatTime(fixture.date_utc)}</span>
-                                  <span className="truncate">{roundLabel ?? ""}</span>
-                                </div>
-                                <div className="mt-1 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-xs">
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    {fixture.home?.logo ? (
-                                      <img
-                                        src={fixture.home.logo}
-                                        alt={fixture.home.name ?? "Home"}
-                                        className="w-4 h-4 object-contain"
-                                      />
-                                    ) : (
-                                      <div className="w-4 h-4 rounded-full bg-white/10" />
-                                    )}
-                                    <span className="truncate font-semibold">
-                                      {fixture.home?.name ?? "Home"}
-                                    </span>
-                                  </div>
-                                  <div
-                                    className={`text-center ${
-                                      activeDay === "yesterday" && hasScore
-                                        ? "text-sm font-semibold text-white/90"
-                                        : "text-xs text-white/60"
-                                    }`}
-                                  >
-                                    {activeDay === "yesterday" && hasScore
-                                      ? `${fixture.goals_home} - ${fixture.goals_away}`
-                                      : "VS"}
-                                  </div>
-                                  <div className="flex items-center justify-end gap-2 min-w-0 text-right">
-                                    <span className="truncate font-semibold">
-                                      {fixture.away?.name ?? "Away"}
-                                    </span>
-                                    {fixture.away?.logo ? (
-                                      <img
-                                        src={fixture.away.logo}
-                                        alt={fixture.away.name ?? "Away"}
-                                        className="w-4 h-4 object-contain"
-                                      />
-                                    ) : (
-                                      <div className="w-4 h-4 rounded-full bg-white/10" />
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-
-                            return homeHref ? (
-                              <Link key={fixture.id} href={homeHref} className="block">
-                                {row}
-                              </Link>
-                            ) : (
-                              <div key={fixture.id}>{row}</div>
-                            );
-                          })}
-                        </div>
-                      </details>
-                  );
-                })}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    <RencontreClientView
+      activeDay={activeDay}
+      yesterdayHref={yesterdayHref}
+      todayHref={todayHref}
+      tomorrowHref={tomorrowHref}
+      hasError={Boolean(error)}
+      sections={sectionsData}
+    />
   );
 }

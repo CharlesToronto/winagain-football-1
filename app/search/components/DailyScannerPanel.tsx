@@ -211,6 +211,21 @@ function extractPickLine(pick: string): MarketLine | null {
   return line as MarketLine;
 }
 
+function resolveTeamLogoUrl(rawLogo: string | null | undefined, teamId?: number | null) {
+  const normalized = String(rawLogo ?? "").trim();
+  if (
+    normalized &&
+    normalized.toLowerCase() !== "null" &&
+    normalized.toLowerCase() !== "undefined"
+  ) {
+    return normalized;
+  }
+  if (Number.isFinite(teamId) && (teamId ?? 0) > 0) {
+    return `https://media.api-sports.io/football/teams/${teamId}.png`;
+  }
+  return null;
+}
+
 function isSameLine(a: MarketLine, b: MarketLine) {
   if (typeof a === "number" && typeof b === "number") return a === b;
   if (typeof a === "string" && typeof b === "string") return a === b;
@@ -2525,7 +2540,20 @@ export default function DailyScannerPanel() {
                 </summary>
                 <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
                   {group.items.map((row) => {
-                    const targetHref = row.homeId ? `/team/${row.homeId}` : null;
+                    const targetTeamId =
+                      Number.isFinite(row.teamId) && row.teamId > 0
+                        ? row.teamId
+                        : Number.isFinite(row.homeId) && (row.homeId ?? 0) > 0
+                          ? Number(row.homeId)
+                          : null;
+                    const homeLogoUrl = resolveTeamLogoUrl(row.homeLogo, row.homeId);
+                    const awayLogoUrl = resolveTeamLogoUrl(row.awayLogo, row.awayId);
+                    const targetHref = (() => {
+                      if (!targetTeamId) return null;
+                      const params = new URLSearchParams({ tab: "backtest", from: "search" });
+                      if (row.dateUtc) params.set("asOf", row.dateUtc);
+                      return `/team/${targetTeamId}?${params.toString()}`;
+                    })();
                     const hits = row.picks
                       ? Math.min(row.picks, Math.max(0, Math.round(row.hitRate * row.picks)))
                       : 0;
@@ -2564,14 +2592,14 @@ export default function DailyScannerPanel() {
                         </div>
                         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
                           <div className="flex items-center gap-2 min-w-0">
-                            {row.homeLogo ? (
+                            {homeLogoUrl ? (
                               <img
-                                src={row.homeLogo}
+                                src={homeLogoUrl}
                                 alt={row.homeName ?? "Home"}
-                                className="w-6 h-6 object-contain"
+                                className="w-7 h-7 rounded-full bg-white/10 object-contain p-0.5 ring-1 ring-white/10 shrink-0"
                               />
                             ) : (
-                              <div className="w-6 h-6 rounded-full bg-white/10" />
+                              <div className="w-7 h-7 rounded-full bg-white/10 ring-1 ring-white/10 shrink-0" />
                             )}
                             <span className="text-sm font-semibold truncate">
                               {row.homeName ?? "Home"}
@@ -2582,14 +2610,14 @@ export default function DailyScannerPanel() {
                             <span className="text-sm font-semibold truncate">
                               {row.awayName ?? "Away"}
                             </span>
-                            {row.awayLogo ? (
+                            {awayLogoUrl ? (
                               <img
-                                src={row.awayLogo}
+                                src={awayLogoUrl}
                                 alt={row.awayName ?? "Away"}
-                                className="w-6 h-6 object-contain"
+                                className="w-7 h-7 rounded-full bg-white/10 object-contain p-0.5 ring-1 ring-white/10 shrink-0"
                               />
                             ) : (
-                              <div className="w-6 h-6 rounded-full bg-white/10" />
+                              <div className="w-7 h-7 rounded-full bg-white/10 ring-1 ring-white/10 shrink-0" />
                             )}
                           </div>
                         </div>
