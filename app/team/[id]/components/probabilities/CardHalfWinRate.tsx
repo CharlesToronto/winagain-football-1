@@ -204,13 +204,11 @@ export default function CardHalfWinRate({
     : "";
 
   return (
-    <div className="bg-white/5 rounded-xl p-6 shadow flex flex-col md:h-[20rem]">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h3 className="font-semibold">Au moins une mi-temps</h3>
-        </div>
+    <div className="rounded-xl border border-white/10 bg-white/5 p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="text-base font-semibold leading-tight">Au moins une mi-temps</h3>
       </div>
-      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
         <div
           role={selectable ? "button" : undefined}
           tabIndex={selectable ? 0 : undefined}
@@ -229,32 +227,32 @@ export default function CardHalfWinRate({
                 }
               : undefined
           }
-          className={`rounded-lg p-3 border ${selectableClass} ${
+          className={`rounded-lg border px-3 py-2 ${selectableClass} ${
             highlightWon
               ? "bg-yellow-400/10 ring-1 ring-yellow-300/40 border-yellow-200/40"
               : "bg-white/5 border-white/5"
           }`}
         >
           <div className="text-xs text-white/70">Gagnée</div>
-          <div className="mt-1 flex items-end justify-between gap-3">
+          <div className="mt-1 flex items-center justify-between gap-3">
             <div>
               <div
-                className={`text-2xl font-semibold ${
+                className={`text-xl font-semibold leading-none lg:text-[22px] ${
                   highlightWon ? "text-yellow-200" : "text-emerald-300"
                 }`}
               >
                 {percentWonLabel}
               </div>
-              <div className="text-xs text-white/70">
+              <div className="text-[11px] leading-tight text-white/70">
                 ({won}/{total})
               </div>
             </div>
             {showOpponent && (
               <div className="text-right">
-                <div className="text-2xl font-semibold text-blue-300">
+                <div className="text-xl font-semibold leading-none lg:text-[22px] text-blue-300">
                   {opponentPercentWonLabel}
                 </div>
-                <div className="text-xs text-white/60">
+                <div className="text-[11px] leading-tight text-white/60">
                   ({opponentWon}/{opponentTotal})
                 </div>
               </div>
@@ -279,32 +277,32 @@ export default function CardHalfWinRate({
                 }
               : undefined
           }
-          className={`rounded-lg p-3 border ${selectableClass} ${
+          className={`rounded-lg border px-3 py-2 ${selectableClass} ${
             highlightDraw
               ? "bg-yellow-400/10 ring-1 ring-yellow-300/40 border-yellow-200/40"
               : "bg-white/5 border-white/5"
           }`}
         >
           <div className="text-xs text-white/70">Nulle</div>
-          <div className="mt-1 flex items-end justify-between gap-3">
+          <div className="mt-1 flex items-center justify-between gap-3">
             <div>
               <div
-                className={`text-2xl font-semibold ${
+                className={`text-xl font-semibold leading-none lg:text-[22px] ${
                   highlightDraw ? "text-yellow-200" : "text-sky-300"
                 }`}
               >
                 {percentDrawLabel}
               </div>
-              <div className="text-xs text-white/70">
+              <div className="text-[11px] leading-tight text-white/70">
                 ({draw}/{total})
               </div>
             </div>
             {showOpponent && (
               <div className="text-right">
-                <div className="text-2xl font-semibold text-blue-300">
+                <div className="text-xl font-semibold leading-none lg:text-[22px] text-blue-300">
                   {opponentPercentDrawLabel}
                 </div>
-                <div className="text-xs text-white/60">
+                <div className="text-[11px] leading-tight text-white/60">
                   ({opponentDraw}/{opponentTotal})
                 </div>
               </div>
@@ -329,32 +327,32 @@ export default function CardHalfWinRate({
                 }
               : undefined
           }
-          className={`rounded-lg p-3 border ${selectableClass} ${
+          className={`rounded-lg border px-3 py-2 ${selectableClass} ${
             highlightLost
               ? "bg-yellow-400/10 ring-1 ring-yellow-300/40 border-yellow-200/40"
               : "bg-white/5 border-white/5"
           }`}
         >
           <div className="text-xs text-white/70">Perdu</div>
-          <div className="mt-1 flex items-end justify-between gap-3">
+          <div className="mt-1 flex items-center justify-between gap-3">
             <div>
               <div
-                className={`text-2xl font-semibold ${
+                className={`text-xl font-semibold leading-none lg:text-[22px] ${
                   highlightLost ? "text-yellow-200" : "text-emerald-300"
                 }`}
               >
                 {percentLostLabel}
               </div>
-              <div className="text-xs text-white/70">
+              <div className="text-[11px] leading-tight text-white/70">
                 ({lost}/{total})
               </div>
             </div>
             {showOpponent && (
               <div className="text-right">
-                <div className="text-2xl font-semibold text-blue-300">
+                <div className="text-xl font-semibold leading-none lg:text-[22px] text-blue-300">
                   {opponentPercentLostLabel}
                 </div>
-                <div className="text-xs text-white/60">
+                <div className="text-[11px] leading-tight text-white/60">
                   ({opponentLost}/{opponentTotal})
                 </div>
               </div>
@@ -362,7 +360,7 @@ export default function CardHalfWinRate({
           </div>
         </div>
       </div>
-      <div className="mt-3 text-xs text-white/60">
+      <div className="mt-2 text-[11px] text-white/60">
         {total > 0
           ? `Basé sur ${total} match(s) avec score mi-temps.`
           : "Aucune donnée mi-temps disponible."}

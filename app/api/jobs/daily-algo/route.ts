@@ -20,6 +20,7 @@ import {
 import { fetchFixtureOddsFromApi } from "@/lib/odds/fixtureOdds";
 
 export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const WINDOWS = [10, 15, 20, 25, 30];
 const BUCKETS = [3, 5];
@@ -826,6 +827,7 @@ function evaluatePick(pick: string, scores: FixtureScores) {
 }
 
 export async function GET(request: Request) {
+  const startedAt = Date.now();
   const supabase = createClient();
   try {
     const url = new URL(request.url);
@@ -844,6 +846,7 @@ export async function GET(request: Request) {
 
     const summary: Record<string, any> = {};
     summary.algo = algoVersion;
+    summary.task = task;
 
     if (task === "all" || task === "resolve") {
       const pending: any[] = [];
@@ -1726,8 +1729,23 @@ export async function GET(request: Request) {
       summary.to = toKey;
     }
 
+    summary.generatedAt = new Date().toISOString();
+    summary.durationMs = Date.now() - startedAt;
+    summary.pid = process.pid;
+    summary.nonce = url.searchParams.get("t") ?? null;
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+    try {
+      summary.supabaseHost = supabaseUrl ? new URL(supabaseUrl).host : null;
+    } catch {
+      summary.supabaseHost = null;
+    }
+
     const res = NextResponse.json({ ok: true, ...summary });
-    res.headers.set("Cache-Control", "no-store, max-age=0");
+    res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.headers.set("Pragma", "no-cache");
+    res.headers.set("Expires", "0");
+    res.headers.set("Surrogate-Control", "no-store");
     return res;
   } catch (err: any) {
     return NextResponse.json(
@@ -1735,4 +1753,8 @@ export async function GET(request: Request) {
       { status: 500 }
     );
   }
+}
+
+export async function POST(request: Request) {
+  return GET(request);
 }

@@ -43,7 +43,9 @@ export default function MobileNav() {
                       setOpenGroups((prev) => ({ ...prev, [item.href]: !prev[item.href] }))
                     }
                     className={`flex shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-3 py-2 text-[10px] min-w-[72px] ${
-                      active
+                      groupOpen
+                        ? "text-sky-300"
+                        : active
                         ? "bg-white/15 text-white"
                         : "text-white/70 hover:bg-white/10"
                     }`}

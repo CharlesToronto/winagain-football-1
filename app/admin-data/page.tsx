@@ -36,6 +36,11 @@ from public.daily_algo_picks_v3;`;
 from public.daily_algo_picks_v3
 where status in ('hit','miss');`;
 
+  const sqlPendingPicksV3 = `select count(*) as pending_picks_v3
+from public.daily_algo_picks_v3
+where status = 'pending'
+   or status is null;`;
+
   const CACHE_KEY = "admin-data-cache-v1";
   const CACHE_TTL_MS = 10 * 24 * 60 * 60 * 1000; // 10 jours
 
@@ -359,7 +364,7 @@ where status in ('hit','miss');`;
           <div>
             <p className="text-sm font-semibold">SQL (Algo v3)</p>
             <p className="text-xs text-white/70">
-              Requêtes utiles pour vérifier le volume de picks et le nombre de picks résolus.
+              Requêtes utiles pour vérifier le volume de picks, les picks résolus et les picks pending.
             </p>
           </div>
         </div>
@@ -394,6 +399,22 @@ where status in ('hit','miss');`;
             </div>
             <pre className="text-xs text-white/80 whitespace-pre-wrap break-words select-text font-mono">
               {sqlResolvedPicksV3}
+            </pre>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <p className="text-xs font-semibold text-white/80">Nombre de picks pending (v3)</p>
+              <button
+                type="button"
+                onClick={() => copyToClipboard(sqlPendingPicksV3)}
+                className="text-xs px-2 py-1 rounded-md border border-white/15 bg-white/10 hover:bg-white/15"
+              >
+                Copier
+              </button>
+            </div>
+            <pre className="text-xs text-white/80 whitespace-pre-wrap break-words select-text font-mono">
+              {sqlPendingPicksV3}
             </pre>
           </div>
         </div>

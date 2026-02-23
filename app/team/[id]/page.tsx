@@ -87,7 +87,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
   const effectiveRange = range;
   const rangeOptions: RangeOption[] = ["season", 50, 40, 30, 20, 10];
   const tabOptions = [
-    { key: "dashboard", label: "Charly IA" },
+    { key: "dashboard", label: "Accueil" },
     { key: "stats", label: "Team Stats" },
     { key: "league", label: "League Stats" },
     { key: "backtest", label: "Algorithme" },
@@ -540,7 +540,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
             d="M12 19V5m0 0l-6 6m6-6l6 6"
           />
         </svg>
-        <span className="hidden md:inline-flex text-xs text-white/70 whitespace-nowrap">
+        <span className="tool-label hidden md:inline-flex text-xs text-white/70 whitespace-nowrap">
           Signal
         </span>
       </div>
@@ -575,7 +575,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
             d="M16.5 16.5L21 21"
           />
         </svg>
-        <span className="hidden md:inline-flex text-xs whitespace-nowrap">Over / Under</span>
+        <span className="tool-label hidden md:inline-flex text-xs whitespace-nowrap">Over / Under</span>
       </button>
       <button
         type="button"
@@ -603,7 +603,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
           <circle cx="12" cy="12" r="2" />
           <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
         </svg>
-        <span className="hidden md:inline-flex text-xs whitespace-nowrap">Cible</span>
+        <span className="tool-label hidden md:inline-flex text-xs whitespace-nowrap">Cible</span>
       </button>
       <button
         type="button"
@@ -622,23 +622,10 @@ export default function TeamPage({ params }: { params: { id: string } }) {
             : "text-white/50"
         }`}
       >
-        <svg
-          viewBox="0 0 24 24"
-          className="w-5 h-5 md:w-4 md:h-4"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.5}
-          aria-hidden
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            d="M4 20l6-2 8-8-4-4-8 8-2 6z"
-          />
-          <path strokeLinecap="round" strokeLinejoin="round" d="M14 6l4 4" />
-          <path strokeLinecap="round" strokeLinejoin="round" d="M3 21l3-3" />
-        </svg>
-        <span className="hidden md:inline-flex text-xs whitespace-nowrap">
+        <span className="text-[11px] font-semibold uppercase tracking-wide md:text-[10px]">
+          VS
+        </span>
+        <span className="tool-label hidden md:inline-flex text-xs whitespace-nowrap">
           Adversaire
         </span>
       </button>
@@ -654,19 +641,8 @@ export default function TeamPage({ params }: { params: { id: string } }) {
             : "text-white/90 hover:bg-white/20"
         }`}
       >
-        <svg
-          viewBox="0 0 24 24"
-          className="w-5 h-5 md:w-4 md:h-4"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.5}
-          aria-hidden
-        >
-          <circle cx="7" cy="7" r="2" />
-          <circle cx="17" cy="17" r="2" />
-          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6" />
-        </svg>
-        <span className="hidden md:inline-flex text-xs whitespace-nowrap">Odds</span>
+        <span className="text-[11px] font-semibold md:text-[10px]">Odd</span>
+        <span className="tool-label hidden md:inline-flex text-xs whitespace-nowrap">Odds</span>
       </button>
       <button
         type="button"
@@ -690,7 +666,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
           <rect x="3" y="5" width="18" height="16" rx="2" />
           <path d="M8 3v4M16 3v4M3 9h18" />
         </svg>
-        <span className="hidden md:inline-flex text-xs whitespace-nowrap">
+        <span className="tool-label hidden md:inline-flex text-xs whitespace-nowrap">
           Calendrier
         </span>
       </button>
@@ -715,7 +691,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
             d="M11.48 3.5a.7.7 0 0 1 1.04 0l2.36 2.4c.2.2.46.32.74.35l3.33.5a.7.7 0 0 1 .39 1.2l-2.4 2.35a.7.7 0 0 0-.2.62l.58 3.3a.7.7 0 0 1-1.01.74l-2.98-1.56a.7.7 0 0 0-.65 0l-2.98 1.56a.7.7 0 0 1-1.01-.74l.58-3.3a.7.7 0 0 0-.2-.62L4.8 7.95a.7.7 0 0 1 .39-1.2l3.33-.5a.7.7 0 0 0 .74-.35l2.36-2.4Z"
           />
         </svg>
-        <span className="hidden md:inline-flex text-xs whitespace-nowrap">
+        <span className="tool-label hidden md:inline-flex text-xs whitespace-nowrap">
           Favoris
         </span>
       </button>
@@ -746,7 +722,7 @@ export default function TeamPage({ params }: { params: { id: string } }) {
           />
           <path strokeLinecap="round" strokeLinejoin="round" d="M15 3v4h4" />
         </svg>
-        <span className="hidden md:inline-flex text-xs whitespace-nowrap">
+        <span className="tool-label hidden md:inline-flex text-xs whitespace-nowrap">
           Copier
         </span>
       </button>
@@ -797,11 +773,11 @@ export default function TeamPage({ params }: { params: { id: string } }) {
 
   const sidebarTools = sidebarToolsTarget
     ? createPortal(
-        <div className="flex flex-col items-start gap-3 text-white w-full">
+        <div className="flex flex-col items-start gap-2 text-white w-full">
           <div
             className={`${
-              actionsOpen ? "flex" : "hidden"
-            } flex-col items-start gap-2 w-full`}
+              actionsOpen ? "grid" : "hidden"
+            } grid-cols-3 gap-2 w-full [&_.tool-label]:hidden [&>*]:md:h-9 [&>*]:rounded-lg [&>*]:md:justify-center [&>*]:md:px-0 [&>*]:md:gap-0`}
           >
             {toolsButtons}
           </div>
@@ -1338,6 +1314,42 @@ function DashboardView({
 
   // Premier match futur valide
   const computedNextMatch = nextMatch || futureMatches[0] || null;
+  const nextMatchDateRaw = computedNextMatch?.fixture?.date ?? null;
+  const nextMatchStatus = String(computedNextMatch?.fixture?.status?.short ?? "NS").toUpperCase();
+  const [countdownNow, setCountdownNow] = useState(() => Date.now());
+  const kickoffTimestamp = useMemo(() => {
+    if (!nextMatchDateRaw) return null;
+    const value = new Date(nextMatchDateRaw).getTime();
+    return Number.isFinite(value) ? value : null;
+  }, [nextMatchDateRaw]);
+
+  useEffect(() => {
+    if (!kickoffTimestamp || nextMatchStatus !== "NS") return;
+    setCountdownNow(Date.now());
+    const timerId = window.setInterval(() => {
+      setCountdownNow(Date.now());
+    }, 1000);
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [kickoffTimestamp, nextMatchStatus]);
+
+  const kickoffCountdownLabel = useMemo(() => {
+    if (!kickoffTimestamp) return null;
+    if (nextMatchStatus !== "NS") return null;
+    const remainingMs = kickoffTimestamp - countdownNow;
+    if (remainingMs <= 0) return "00 : 00 : 00";
+    const totalSeconds = Math.floor(remainingMs / 1000);
+    const totalHours = Math.floor(totalSeconds / 3600);
+    const hours = totalHours;
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const hh = String(hours).padStart(2, "0");
+    const mm = String(minutes).padStart(2, "0");
+    const ss = String(seconds).padStart(2, "0");
+    return `${hh} : ${mm} : ${ss}`;
+  }, [kickoffTimestamp, countdownNow, nextMatchStatus]);
+
   const h2hHomeId = computedNextMatch?.teams?.home?.id ?? null;
   const h2hAwayId = computedNextMatch?.teams?.away?.id ?? null;
   const h2hLeagueId = league?.id ?? computedNextMatch?.league?.id ?? null;
@@ -1371,7 +1383,14 @@ function DashboardView({
         calendarActive ? "ring-1 ring-red-500/70" : ""
       }`}
     >
-      <h2 className="text-base sm:text-lg font-semibold">Prochain match</h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-base sm:text-lg font-semibold">Prochain match</h2>
+        {kickoffCountdownLabel ? (
+          <span className="text-[10px] sm:text-xs font-semibold text-emerald-200 tabular-nums whitespace-nowrap">
+            {kickoffCountdownLabel}
+          </span>
+        ) : null}
+      </div>
       {!computedNextMatch ? (
         <p>Aucun prochain match.</p>
       ) : (

@@ -10,13 +10,31 @@ function formatDateKey(value: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function normalizeRatio(value: any) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  if (num > 1 && num <= 100) return num / 100;
+  return num;
+}
+
+function isBluePick(row: any) {
+  const probability = Number(row?.probability);
+  const odd = Number(row?.odd);
+  const hitRate = normalizeRatio(row?.hit_rate);
+  if (!Number.isFinite(probability) || probability <= 0) return false;
+  if (!Number.isFinite(odd) || odd <= 1) return false;
+  if (!Number.isFinite(hitRate ?? NaN) || (hitRate ?? 0) <= 0.9) return false;
+  const implied = 1 / odd;
+  return probability > implied;
+}
+
 export async function GET(request: Request) {
   const supabase = createClient();
   try {
     const url = new URL(request.url);
     const daysParam = Number(url.searchParams.get("days") ?? "30");
     const days = Number.isFinite(daysParam) && daysParam > 0 ? daysParam : 30;
-    const criteria = url.searchParams.get("criteria") ?? "all";
+    const criteria = (url.searchParams.get("criteria") ?? "all").toLowerCase();
     const market = url.searchParams.get("market") ?? "all";
     const algoVersion = (url.searchParams.get("algo") ?? "v1").toLowerCase();
     const tableName =
@@ -126,8 +144,9 @@ export async function GET(request: Request) {
       home_team_id: fixtureHomeTeamMap.get(Number(row?.fixture_id)) ?? null,
       away_team_id: fixtureAwayTeamMap.get(Number(row?.fixture_id)) ?? null,
     }));
+    const finalItems = criteria === "blue" ? enriched.filter(isBluePick) : enriched;
 
-    const res = NextResponse.json({ items: enriched });
+    const res = NextResponse.json({ items: finalItems });
     // Explicitly prevent caching. We rely on live DB state (statuses change after resolve).
     res.headers.set("Cache-Control", "no-store, max-age=0");
     res.headers.set("Pragma", "no-cache");

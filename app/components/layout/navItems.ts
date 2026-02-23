@@ -11,9 +11,16 @@ import {
 } from "@/app/components/icons";
 
 export const navItems = [
-  { name: "Leagues", href: "/leagues", icon: IconTrophy },
-  { name: "Rencontre", href: "/rencontre", icon: IconCalendar },
-  { name: "Search", href: "/search", icon: IconSearch },
+  {
+    name: "Match",
+    href: "/match",
+    icon: IconCalendar,
+    children: [
+      { name: "Leagues", href: "/leagues", icon: IconTrophy },
+      { name: "Rencontre", href: "/rencontre", icon: IconCalendar },
+      { name: "Search", href: "/search", icon: IconSearch },
+    ],
+  },
   {
     name: "Historique Algo",
     href: "/picks",

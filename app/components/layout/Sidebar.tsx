@@ -81,7 +81,9 @@ export default function Sidebar() {
                     setOpenGroups((prev) => ({ ...prev, [item.href]: !prev[item.href] }))
                   }
                   className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm w-full ${
-                    active
+                    groupOpen
+                      ? "text-sky-300"
+                      : active
                       ? "bg-white/20 text-white"
                       : "text-white/80 hover:bg-white/10"
                   }`}

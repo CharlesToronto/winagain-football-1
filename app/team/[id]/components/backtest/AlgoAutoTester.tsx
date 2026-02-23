@@ -37,6 +37,29 @@ function lineKey(line: MarketLine) {
   return typeof line === "number" ? line.toString() : line;
 }
 
+function formatLineLabel(line: MarketLine) {
+  return typeof line === "number" ? line.toString() : line;
+}
+
+function buildLineSignature(lines: MarketLine[]) {
+  return (lines ?? []).map((line) => formatLineLabel(line)).join("/");
+}
+
+function hash32(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function buildPickSignature(parts: string[]) {
+  if (!parts.length) return "none";
+  const normalized = parts.slice().sort().join("|");
+  return hash32(normalized).toString(16);
+}
+
 type FixtureOdds = {
   overUnder?: { over: Record<string, string>; under: Record<string, string> };
   doubleChance?: Record<"1X" | "X2" | "12", string>;
@@ -59,13 +82,51 @@ type ResultStats = {
   avgProbability: number;
   valueScore: number;
   roiScore: number;
+  pickSignature: string;
 };
 
 type AutoTestRow = {
   id: string;
   settings: AlgoSettings;
   stats: ResultStats;
+  lineSignature: string;
 };
+
+function compareAutoRows(a: AutoTestRow, b: AutoTestRow) {
+  if (b.stats.roiScore !== a.stats.roiScore) return b.stats.roiScore - a.stats.roiScore;
+  if (b.stats.hitRate !== a.stats.hitRate) return b.stats.hitRate - a.stats.hitRate;
+  if (b.stats.valueScore !== a.stats.valueScore) return b.stats.valueScore - a.stats.valueScore;
+  if (b.stats.picks !== a.stats.picks) return b.stats.picks - a.stats.picks;
+  return b.stats.coverage - a.stats.coverage;
+}
+
+function prioritizeRowsByLinesAndPicks(rows: AutoTestRow[], limit: number) {
+  const ranked = rows.slice().sort(compareAutoRows);
+  const target = Math.max(1, limit);
+  const selected: AutoTestRow[] = [];
+  const usedPickSignatures = new Set<string>();
+  const usedLineSignatures = new Set<string>();
+
+  for (const row of ranked) {
+    if (selected.length >= target) break;
+    if (usedPickSignatures.has(row.stats.pickSignature)) continue;
+    if (usedLineSignatures.has(row.lineSignature)) continue;
+    selected.push(row);
+    usedPickSignatures.add(row.stats.pickSignature);
+    usedLineSignatures.add(row.lineSignature);
+  }
+
+  if (selected.length < target) {
+    for (const row of ranked) {
+      if (selected.length >= target) break;
+      if (usedPickSignatures.has(row.stats.pickSignature)) continue;
+      selected.push(row);
+      usedPickSignatures.add(row.stats.pickSignature);
+    }
+  }
+
+  return selected;
+}
 
 function createWeightProfile(buckets: number, mode: "soft" | "medium" | "hard") {
   const minValue = mode === "soft" ? 0.7 : mode === "medium" ? 0.5 : 0.3;
@@ -87,6 +148,7 @@ function computeStatsBySeason(
   let hits = 0;
   let evaluated = 0;
   let probabilitySum = 0;
+  const pickSignatureParts: string[] = [];
 
   seasons.forEach((season) => {
     const seasonFixtures = fixturesBySeason[season] ?? [];
@@ -99,6 +161,9 @@ function computeStatsBySeason(
     hits += seasonHits;
     evaluated += allPicks.length;
     probabilitySum += filtered.reduce((sum, pick) => sum + (pick.probability || 0), 0);
+    filtered.forEach((pick) => {
+      pickSignatureParts.push(`${season}:${pick.fixtureId}:${pick.pick}`);
+    });
   });
 
   const hitRate = picks ? hits / picks : 0;
@@ -106,7 +171,18 @@ function computeStatsBySeason(
   const avgProbability = picks ? probabilitySum / picks : 0;
   const valueScore = avgProbability - settings.threshold;
   const roiScore = hitRate * avgProbability;
-  return { picks, hits, hitRate, coverage, evaluated, avgProbability, valueScore, roiScore };
+  const pickSignature = buildPickSignature(pickSignatureParts);
+  return {
+    picks,
+    hits,
+    hitRate,
+    coverage,
+    evaluated,
+    avgProbability,
+    valueScore,
+    roiScore,
+    pickSignature,
+  };
 }
 
 function buildCandidateSettings(
@@ -419,19 +495,16 @@ export default function AlgoAutoTester({
         id: `auto-${index}`,
         settings,
         stats: computeStatsBySeason(seasons, fixturesBySeason, teamId, settings),
+        lineSignature: buildLineSignature(settings.lines),
       }));
       const filtered = computed.filter(
         (row) => row.stats.hitRate >= 0.8 && row.stats.hitRate <= 1
       );
-      const sorted = filtered
-        .slice()
-        .sort((a, b) => {
-          if (b.stats.picks !== a.stats.picks) return b.stats.picks - a.stats.picks;
-          if (b.stats.hitRate !== a.stats.hitRate) return b.stats.hitRate - a.stats.hitRate;
-          return b.stats.coverage - a.stats.coverage;
-        })
-        .slice(0, Math.max(1, resultLimit));
-      setResults(sorted);
+      const displayRows = prioritizeRowsByLinesAndPicks(
+        filtered,
+        Math.max(1, resultLimit)
+      );
+      setResults(filtered);
       setRunSummary({
         calcCount: computed.length,
         lineVariants: availableLineSets.length || selectedLineList.length,
@@ -448,7 +521,7 @@ export default function AlgoAutoTester({
           seasonMode,
           minCoverage,
           lines: selectedLineList,
-          results: sorted.map((row) => ({ settings: row.settings, stats: row.stats })),
+          results: displayRows.map((row) => ({ settings: row.settings, stats: row.stats })),
           calcCount: computed.length,
         },
       });
@@ -487,20 +560,6 @@ export default function AlgoAutoTester({
 
     startOverlay(totalCount, () => {
       setTimeout(() => {
-        const rankRows = (list: AutoTestRow[]) =>
-          list
-            .slice()
-            .sort((a, b) => {
-              if (b.stats.roiScore !== a.stats.roiScore)
-                return b.stats.roiScore - a.stats.roiScore;
-              if (b.stats.hitRate !== a.stats.hitRate)
-                return b.stats.hitRate - a.stats.hitRate;
-              if (b.stats.valueScore !== a.stats.valueScore)
-                return b.stats.valueScore - a.stats.valueScore;
-              if (b.stats.picks !== a.stats.picks) return b.stats.picks - a.stats.picks;
-              return b.stats.coverage - a.stats.coverage;
-            });
-
         // Phase 1: broad search with single weight mode
         const startTime = Date.now();
         const maxMs = 60_000;
@@ -515,6 +574,7 @@ export default function AlgoAutoTester({
             id: `phase1-${index}`,
             settings,
             stats: computeStatsBySeason(seasons, fixturesBySeason, teamId, settings),
+            lineSignature: buildLineSignature(settings.lines),
           });
         }
         const phase1Filtered = phase1Computed.filter(
@@ -523,7 +583,7 @@ export default function AlgoAutoTester({
             row.stats.hitRate <= 1 &&
             row.stats.coverage >= 0.3
         );
-        const topPhase1 = rankRows(phase1Filtered).slice(0, 50);
+        const topPhase1 = phase1Filtered.slice().sort(compareAutoRows).slice(0, 50);
 
         // Phase 2: refine best 50 with all weight modes
         const phase2Candidates: AlgoSettings[] = [];
@@ -551,6 +611,7 @@ export default function AlgoAutoTester({
             id: `phase2-${index}`,
             settings,
             stats: computeStatsBySeason(seasons, fixturesBySeason, teamId, settings),
+            lineSignature: buildLineSignature(settings.lines),
           });
         }
         const phase2Filtered = phase2Computed.filter(
@@ -560,8 +621,11 @@ export default function AlgoAutoTester({
             row.stats.coverage >= 0.3
         );
 
-        const finalSorted = rankRows(phase2Filtered).slice(0, Math.max(1, resultLimit));
-        setResults(finalSorted);
+        const finalDisplay = prioritizeRowsByLinesAndPicks(
+          phase2Filtered,
+          Math.max(1, resultLimit)
+        );
+        setResults(phase2Filtered);
         setRunSummary({
           calcCount: phase1Computed.length + phase2Computed.length,
           lineVariants: availableLineSets.length || selectedLineList.length,
@@ -579,7 +643,7 @@ export default function AlgoAutoTester({
             seasonMode,
             minCoverage,
             lines: selectedLineList,
-            results: finalSorted.map((row) => ({ settings: row.settings, stats: row.stats })),
+            results: finalDisplay.map((row) => ({ settings: row.settings, stats: row.stats })),
             calcCount: phase1Computed.length + phase2Computed.length,
           },
         });
@@ -612,34 +676,21 @@ export default function AlgoAutoTester({
     return () => window.clearTimeout(timeoutId);
   }, [results.length]);
 
-    const bestResult = useMemo(() => {
-    if (!results.length) return null;
-    const eligible = results.filter((row) => row.stats.coverage >= minCoverage);
-    const list = eligible.length ? eligible : results;
-    return list
-      .slice()
-      .sort((a, b) => {
-        if (b.stats.roiScore !== a.stats.roiScore) return b.stats.roiScore - a.stats.roiScore;
-        if (b.stats.hitRate !== a.stats.hitRate) return b.stats.hitRate - a.stats.hitRate;
-        if (b.stats.valueScore !== a.stats.valueScore)
-          return b.stats.valueScore - a.stats.valueScore;
-        return b.stats.coverage - a.stats.coverage;
-      })[0];
-  }, [results, minCoverage]);
+  const prioritizedResults = useMemo(
+    () => prioritizeRowsByLinesAndPicks(results, Math.max(1, results.length)),
+    [results]
+  );
+
+  const bestResult = useMemo(() => {
+    if (!prioritizedResults.length) return null;
+    const eligible = prioritizedResults.filter((row) => row.stats.coverage >= minCoverage);
+    const list = eligible.length ? eligible : prioritizedResults;
+    return list.slice().sort(compareAutoRows)[0];
+  }, [prioritizedResults, minCoverage]);
 
   const sortedResults = useMemo(() => {
-    return results
-      .slice()
-      .sort((a, b) => {
-        if (b.stats.roiScore !== a.stats.roiScore) return b.stats.roiScore - a.stats.roiScore;
-        if (b.stats.hitRate !== a.stats.hitRate) return b.stats.hitRate - a.stats.hitRate;
-        if (b.stats.valueScore !== a.stats.valueScore)
-          return b.stats.valueScore - a.stats.valueScore;
-        if (b.stats.picks !== a.stats.picks) return b.stats.picks - a.stats.picks;
-        return b.stats.coverage - a.stats.coverage;
-      })
-      .slice(0, Math.max(1, resultLimit));
-  }, [results, resultLimit]);
+    return prioritizedResults.slice(0, Math.max(1, resultLimit));
+  }, [prioritizedResults, resultLimit]);
 
   const analysisPayload = useMemo(() => {
     const serializeSettings = (settings: AlgoSettings) => ({
@@ -919,6 +970,9 @@ export default function AlgoAutoTester({
               ) : (
                 <>Résultats prêts.</>
               )}
+              <div className="mt-1 text-[11px] text-white/50">
+                Affichage optimisé: priorité aux lines, doublons de picks retirés.
+              </div>
             </div>
             <button
               type="button"
@@ -955,18 +1009,30 @@ export default function AlgoAutoTester({
           )}
 
           {resultsOpen ? (
-            <div className="space-y-2">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
               {sortedResults.map((row, index) => (
                 <div
                   key={row.id}
-                  className={`rounded-xl border px-3 py-3 ${
+                  className={`rounded-lg border p-2.5 ${
                     row.stats.hitRate >= 0.85
                       ? "border-orange-400/60 bg-orange-500/10"
                       : "border-white/10 bg-white/5"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="text-xs text-white/70">#{index + 1}</div>
+                    <div>
+                      <div className="text-[10px] text-white/70">#{index + 1}</div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {row.settings.lines.map((line, lineIndex) => (
+                          <span
+                            key={`${row.id}-line-${lineIndex}`}
+                            className="rounded-md border border-pink-300/40 bg-pink-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-pink-100"
+                          >
+                            {formatLineLabel(line)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
                     <button
                       type="button"
                       onClick={() => {
@@ -980,7 +1046,7 @@ export default function AlgoAutoTester({
                           payload: { source: "autotest", settings: row.settings },
                         });
                       }}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/60 text-white/80 bg-transparent transition hover:border-orange-400 hover:bg-orange-500/20 hover:text-white active:scale-95 ${
+                      className={`inline-flex h-7 w-7 items-center justify-center rounded-md border border-white/60 text-white/80 bg-transparent transition hover:border-orange-400 hover:bg-orange-500/20 hover:text-white active:scale-95 ${
                         savedKey === `row-${row.id}-team`
                           ? "ring-2 ring-orange-400/60 animate-pulse border-orange-400 text-orange-200"
                           : ""
@@ -989,57 +1055,44 @@ export default function AlgoAutoTester({
                       aria-label="Save as team"
                       title="Save as team"
                     >
-                      <IconSave size={16} />
+                      <IconSave size={14} />
                     </button>
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-white/70">
-                    <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1">
-                      win {row.settings.windowSize}
-                    </span>
-                    <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1">
-                      bucket {row.settings.bucketSize}
-                    </span>
-                    <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1">
-                      thr {row.settings.threshold.toFixed(2)}
-                    </span>
-                    <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1 break-all">
-                      lines {row.settings.lines.join("/")}
-                    </span>
-                  </div>
-                  <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-5">
-                    <div className="rounded-md border border-white/10 bg-white/5 px-2 py-1.5">
-                      <div className="text-white/60">Hit</div>
-                      <div className="font-semibold text-blue-300">
+                  <div className="mt-2 grid grid-cols-2 gap-1 text-[11px]">
+                    <div className="flex items-center justify-between rounded-md border border-white/10 bg-white/5 px-2 py-1">
+                      <span className="text-white/60">Hit</span>
+                      <span className="font-semibold text-blue-300">
                         {(row.stats.hitRate * 100).toFixed(1)}%
-                      </div>
+                      </span>
                     </div>
-                    <div className="rounded-md border border-white/10 bg-white/5 px-2 py-1.5">
-                      <div className="text-white/60">Cov</div>
-                      <div className="font-semibold text-blue-300">
-                        {(row.stats.coverage * 100).toFixed(1)}%
-                      </div>
-                    </div>
-                    <div className="rounded-md border border-white/10 bg-white/5 px-2 py-1.5">
-                      <div className="text-white/60">Picks</div>
-                      <div className="font-semibold text-blue-300">
-                        {row.stats.hits}/{row.stats.picks}
-                      </div>
-                    </div>
-                    <div className="rounded-md border border-white/10 bg-white/5 px-2 py-1.5">
-                      <div className="text-white/60">ROI</div>
-                      <div className="font-semibold text-blue-300">
+                    <div className="flex items-center justify-between rounded-md border border-white/10 bg-white/5 px-2 py-1">
+                      <span className="text-white/60">ROI</span>
+                      <span className="font-semibold text-blue-300">
                         {(row.stats.roiScore * 100).toFixed(1)}%
-                      </div>
+                      </span>
                     </div>
-                    <div className="rounded-md border border-white/10 bg-white/5 px-2 py-1.5">
-                      <div className="text-white/60">Value</div>
-                      <div className="font-semibold text-blue-300">
+                    <div className="flex items-center justify-between rounded-md border border-white/10 bg-white/5 px-2 py-1">
+                      <span className="text-white/60">Picks</span>
+                      <span className="font-semibold text-blue-300">
+                        {row.stats.hits}/{row.stats.picks}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border border-white/10 bg-white/5 px-2 py-1">
+                      <span className="text-white/60">Cov</span>
+                      <span className="font-semibold text-blue-300">
+                        {(row.stats.coverage * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border border-white/10 bg-white/5 px-2 py-1">
+                      <span className="text-white/60">Value</span>
+                      <span className="font-semibold text-blue-300">
                         {(row.stats.valueScore * 100).toFixed(1)}%
-                      </div>
+                      </span>
                     </div>
-                  </div>
-                  <div className="mt-3 text-[11px] leading-relaxed text-white/60 break-all">
-                    Weights: {row.settings.weights.join(", ")} • Min team {row.settings.minMatches} • Min league {row.settings.minLeagueMatches}
+                    <div className="flex items-center justify-between rounded-md border border-white/10 bg-white/5 px-2 py-1">
+                      <span className="text-white/60">Eval</span>
+                      <span className="font-semibold text-blue-300">{row.stats.evaluated}</span>
+                    </div>
                   </div>
                 </div>
               ))}

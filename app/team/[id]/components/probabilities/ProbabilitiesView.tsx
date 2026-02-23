@@ -17,6 +17,8 @@ import CardGoalsSplit from "./CardGoalsSplit";
 import CardHalfWinRate from "./CardHalfWinRate";
 import HalfWinTrendCard from "./HalfWinTrendCard";
 import ConfidenceBadgeTrigger from "./ConfidenceBadgeTrigger";
+import CardGoalsRange from "./CardGoalsRange";
+import CardTeamGoalRange from "./CardTeamGoalRange";
 
 import { getProbabilityEngines } from "@/lib/adapters/probabilities";
 import { getTeamFixturesAllSeasons } from "@/lib/queries/fixtures";
@@ -124,6 +126,9 @@ export default function ProbabilitiesView({
     Record<"1X" | "X2" | "12", string> | null
   >(null);
   const [bttsOdds, setBttsOdds] = useState<{ yes: string; no: string } | null>(null);
+  const [goalRangeOdds, setGoalRangeOdds] = useState<
+    Record<"0-1" | "2-3" | "4-6" | "7+", string> | null
+  >(null);
   const [cleanSheetOdds, setCleanSheetOdds] = useState<{
     home: { yes: string; no: string };
     away: { yes: string; no: string };
@@ -165,6 +170,7 @@ export default function ProbabilitiesView({
       setOverUnderOdds(null);
       setDoubleChanceOdds(null);
       setBttsOdds(null);
+      setGoalRangeOdds(null);
       setCleanSheetOdds(null);
       setOverUnderOddsLoading(false);
       return () => {
@@ -186,6 +192,7 @@ export default function ProbabilitiesView({
         setOverUnderOdds(data?.odds?.overUnder ?? null);
         setDoubleChanceOdds(data?.odds?.doubleChance ?? null);
         setBttsOdds(data?.odds?.btts ?? null);
+        setGoalRangeOdds(data?.odds?.goalRange ?? null);
         setCleanSheetOdds(data?.odds?.cleanSheet ?? null);
       })
       .catch(() => {
@@ -193,6 +200,7 @@ export default function ProbabilitiesView({
         setOverUnderOdds(null);
         setDoubleChanceOdds(null);
         setBttsOdds(null);
+        setGoalRangeOdds(null);
         setCleanSheetOdds(null);
       })
       .finally(() => {
@@ -210,6 +218,7 @@ export default function ProbabilitiesView({
     : cibleActive
     ? "rounded-xl border border-blue-500/60"
     : "";
+  const showRangeCards = true;
   const opponentComparisonActive = Boolean(showOpponentComparison);
   const teamGoalsLabel = teamGoalsFocus === "for" ? "Buts marqués" : "Buts encaissés";
   const teamName = useMemo(() => {
@@ -663,6 +672,58 @@ export default function ProbabilitiesView({
           </div>
         </div>
       </div>
+
+      {showRangeCards ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-2">
+            <div className={cardBorderClass}>
+              <CardGoalsRange
+                fixtures={fixtures ?? []}
+                opponentFixtures={opponentFixtures}
+                showOpponentComparison={opponentComparisonActive}
+                mode={filter}
+                showOdds={Boolean(showOdds) && !overUnderOddsLoading}
+                odds={goalRangeOdds}
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className={cardBorderClass}>
+              <CardGoalsRange
+                fixtures={fixtures ?? []}
+                opponentFixtures={opponentFixtures}
+                showOpponentComparison={opponentComparisonActive}
+                mode={filter}
+                focus="against"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className={cardBorderClass}>
+              <CardTeamGoalRange
+                fixtures={fixtures ?? []}
+                opponentFixtures={opponentFixtures}
+                showOpponentComparison={opponentComparisonActive}
+                mode={filter}
+                teamName={teamName}
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className={cardBorderClass}>
+              <CardTeamGoalRange
+                fixtures={fixtures ?? []}
+                opponentFixtures={opponentFixtures}
+                showOpponentComparison={opponentComparisonActive}
+                mode={filter}
+                teamName={teamName}
+                focus="against"
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="mt-6 p-4 rounded-lg bg-white/10 text-white text-sm">
         Mode sélectionné : {filter}
         <br />

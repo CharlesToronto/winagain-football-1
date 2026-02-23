@@ -24,6 +24,7 @@ export type FixtureOdds = {
   overUnder: { over: Record<string, string>; under: Record<string, string> };
   doubleChance: Record<"1X" | "X2" | "12", string>;
   btts: { yes: string; no: string };
+  goalRange: Record<"0-1" | "2-3" | "4-6" | "7+", string>;
   cleanSheet: {
     home: { yes: string; no: string };
     away: { yes: string; no: string };
@@ -60,6 +61,12 @@ function buildEmptyOdds(): FixtureOdds {
       yes: "-",
       no: "-",
     },
+    goalRange: {
+      "0-1": "-",
+      "2-3": "-",
+      "4-6": "-",
+      "7+": "-",
+    },
     cleanSheet: {
       home: { yes: "-", no: "-" },
       away: { yes: "-", no: "-" },
@@ -93,11 +100,46 @@ function mergeOdds(base: FixtureOdds, next: FixtureOdds): FixtureOdds {
   });
   merged.btts.yes = maxOddValue(base.btts.yes, next.btts.yes);
   merged.btts.no = maxOddValue(base.btts.no, next.btts.no);
+  (["0-1", "2-3", "4-6", "7+"] as const).forEach((rangeKey) => {
+    merged.goalRange[rangeKey] = maxOddValue(base.goalRange[rangeKey], next.goalRange[rangeKey]);
+  });
   merged.cleanSheet.home.yes = maxOddValue(base.cleanSheet.home.yes, next.cleanSheet.home.yes);
   merged.cleanSheet.home.no = maxOddValue(base.cleanSheet.home.no, next.cleanSheet.home.no);
   merged.cleanSheet.away.yes = maxOddValue(base.cleanSheet.away.yes, next.cleanSheet.away.yes);
   merged.cleanSheet.away.no = maxOddValue(base.cleanSheet.away.no, next.cleanSheet.away.no);
   return merged;
+}
+
+function normalizeGoalRangeValue(rawValue: unknown): "0-1" | "2-3" | "4-6" | "7+" | null {
+  const raw = String(rawValue ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, "");
+  if (!raw) return null;
+
+  if (/^0[-–]1(goals?)?$/.test(raw) || raw === "0,1" || raw === "0or1") return "0-1";
+  if (/^2[-–]3(goals?)?$/.test(raw) || raw === "2,3" || raw === "2or3") return "2-3";
+  if (/^4[-–]6(goals?)?$/.test(raw) || raw === "4,5,6" || raw === "4or6") return "4-6";
+  if (
+    /^7\+$/.test(raw) ||
+    raw === "7orover" ||
+    raw === "7ormore" ||
+    raw === "7andover"
+  ) {
+    return "7+";
+  }
+  return null;
+}
+
+function isGoalRangeMarketName(betName: string) {
+  if (!betName) return false;
+  const isGoalMarket = betName.includes("goal");
+  const isHalfMarket =
+    betName.includes("first half") ||
+    betName.includes("1st half") ||
+    betName.includes("second half") ||
+    betName.includes("2nd half") ||
+    betName.includes("halftime");
+  return isGoalMarket && !isHalfMarket;
 }
 
 export function parseFixtureOddsFromApi(
@@ -180,6 +222,14 @@ export function parseFixtureOddsFromApi(
         const formatted = formatOdd(entry?.odd ?? entry?.odds);
         if (raw === "yes") odds.btts.yes = formatted;
         if (raw === "no") odds.btts.no = formatted;
+      });
+    }
+
+    if (isGoalRangeMarketName(betName)) {
+      values.forEach((entry: any) => {
+        const key = normalizeGoalRangeValue(entry?.value);
+        if (!key) return;
+        odds.goalRange[key] = formatOdd(entry?.odd ?? entry?.odds);
       });
     }
 

@@ -34,6 +34,7 @@ const criteriaOptions = [
   { key: "all", label: "Tous" },
   { key: "rose", label: "Pick rose" },
   { key: "yellow", label: "Pick jaune" },
+  { key: "blue", label: "Pick bleu" },
 ] as const;
 
 const oddsFilterOptions = [
@@ -83,16 +84,19 @@ const DISCOURAGED_COMPETITIONS = new Set([
   "Scotland|||Football League - Highland League",
   "Scotland|||League One",
   "Belgium|||Challenger Pro League",
+  "Austria|||Bundesliga",
+  "Czech-Republic|||Czech Liga",
+  "Germany|||2. Bundesliga",
   "Hungary|||NB II",
-  "Italy|||Serie C - Girone A",
   "Italy|||Serie B",
   "Israel|||Liga Leumit",
-  "Mexico|||Liga Premier Serie A",
+  "Netherlands|||Eredivisie",
   "Poland|||I Liga",
   "Azerbaijan|||Birinci Dasta",
   "Romania|||Liga I",
   "Serbia|||Super Liga",
   "Slovakia|||Super Liga",
+  "USA|||Major League Soccer",
 ]);
 
 type Combo = {
@@ -125,7 +129,7 @@ export default function AlgoHistoryView({
   const [excludedPickCodes, setExcludedPickCodes] = useState<string[]>([]);
   const [algoVersion, setAlgoVersion] = useState<"v1" | "v2" | "v3">("v3");
   const pathname = usePathname();
-  const [criteria, setCriteria] = useState<"all" | "rose" | "yellow">("all");
+  const [criteria, setCriteria] = useState<"all" | "rose" | "yellow" | "blue">("all");
   const [market, setMarket] = useState<
     "all" | "over_under" | "double_chance" | "1x2" | "btts" | "dnb" | "team_total"
   >("all");
@@ -722,16 +726,19 @@ export default function AlgoHistoryView({
 
   const stats = useMemo(() => {
     const totalDisplay = displayItems.length;
+    const totalFilteredStats = filteredStatsItems.length;
     const resolvedAll = displayItems.filter(
       (row) => row.status === "hit" || row.status === "miss"
     );
     const totalAll = resolvedAll.length;
     const hitsAll = resolvedAll.filter((row) => row.status === "hit").length;
     const missesAll = resolvedAll.filter((row) => row.status === "miss").length;
+    const pendingAll = Math.max(0, totalDisplay - totalAll);
     const hitRateAll = totalAll ? (hitsAll / totalAll) * 100 : 0;
     const total = resolved.length;
     const hits = resolved.filter((row) => row.status === "hit").length;
     const misses = resolved.filter((row) => row.status === "miss").length;
+    const pending = Math.max(0, totalFilteredStats - total);
     const odds = resolved
       .map((row) => Number(row.odd))
       .filter((val) => Number.isFinite(val) && val > 1);
@@ -818,10 +825,13 @@ export default function AlgoHistoryView({
       totalDisplay,
       totalAll,
       total,
+      totalFilteredStats,
       hitsAll,
       hits,
       missesAll,
       misses,
+      pendingAll,
+      pending,
       avgOdd,
       avgOddAll,
       odds130Pct,
@@ -845,7 +855,7 @@ export default function AlgoHistoryView({
       topPick,
       pickEntries,
     };
-  }, [resolved, displayItems]);
+  }, [resolved, displayItems, filteredStatsItems]);
 
   const competitionStats = useMemo(() => {
     const totals = new Map<
@@ -921,6 +931,7 @@ export default function AlgoHistoryView({
 	  const activeCriteriaChipLabel = useMemo(() => {
 	    if (criteria === "rose") return "Rose";
 	    if (criteria === "yellow") return "Jaune";
+	    if (criteria === "blue") return "Bleu";
 	    return "Tous";
 	  }, [criteria]);
 
@@ -2211,43 +2222,111 @@ export default function AlgoHistoryView({
       {view === "singles" ? (
         <>
           <div className="space-y-3">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="flex flex-wrap items-center gap-2 text-[11px] sm:text-xs">
+                <span className="text-white/40 uppercase tracking-wide">Contexte de calcul</span>
+                <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white/80">
+                  {activeAlgoLabel}
+                </span>
+                <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white/80">
+                  Critère: {activeCriteriaChipLabel}
+                </span>
+                <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white/80">
+                  Odds: {activeOddsChipLabel}
+                </span>
+                <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white/80">
+                  Marché: {activeMarketChipLabel}
+                </span>
+                <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-emerald-200">
+                  KPI: hors blacklist
+                </span>
+                <span className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-white/70">
+                  Comparatif: incl. blacklist
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-white/55">
+                <span title="Résolus = hits + miss, sur le scope affiché">
+                  Résolus = Hits + Miss
+                </span>
+                <span title="Pending = total affichés - résolus, sur le même scope">
+                  Pending = Total - Résolus
+                </span>
+                <span title="Taux de réussite = hits / résolus">
+                  Hit rate = Hits / Résolus
+                </span>
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 items-start">
 		              <div className="rounded-xl border-0 bg-gradient-to-br from-indigo-900 via-blue-800 to-sky-600 p-2 sm:p-3 text-white shadow-md shadow-sky-500/25 sm:border-2 sm:border-sky-400 sm:bg-none sm:bg-white/5 sm:shadow-none">
 	                <div className="text-[11px] sm:text-xs text-white/90 sm:text-white/60 leading-tight">
-	                  Picks résolus{" "}
-                    <span className="text-white/40 hidden sm:inline">(hors blacklist)</span>
+	                  Picks résolus (comparaison blacklist)
 	                </div>
-		                <div className="text-lg sm:text-2xl font-semibold leading-none">
-	                  {stats.total}
-                  <span className="text-xs sm:text-sm text-white/80 sm:text-white/40 ml-1.5">/ {stats.totalDisplay}</span>
+                <div className="mt-1 space-y-1">
+		                  <div className="flex items-baseline justify-between gap-2 text-[11px] sm:text-xs">
+                    <span className="text-white/70">Hors blacklist</span>
+                    <span className="font-semibold text-base sm:text-lg leading-none">
+	                      {stats.total}
+                    </span>
+                  </div>
+		                  <div className="flex items-baseline justify-between gap-2 text-[11px] sm:text-xs">
+                    <span className="text-white/70">Incl. blacklist</span>
+                    <span className="font-semibold text-base sm:text-lg leading-none">
+	                      {stats.totalAll}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-1 text-[11px] text-white/45 hidden sm:block">
+                  Hors BL: <span className="text-emerald-200">{stats.hits}</span>
+                  <span className="text-white/35"> / </span>
+                  <span className="text-rose-200">{stats.misses}</span>
+                  {" • "}
+                  Incl.: <span className="text-emerald-200">{stats.hitsAll}</span>
+                  <span className="text-white/35"> / </span>
+                  <span className="text-rose-200">{stats.missesAll}</span>
+                </div>
+                <div className="mt-0.5 text-[11px] text-white/55">
+                  Pending:{" "}
+                  <span className="text-amber-200">{stats.pending}</span>
+                  <span className="text-white/35"> (hors BL)</span>
+                  <span className="text-white/35"> • </span>
+                  <span className="text-amber-200">{stats.pendingAll}</span>
+                  <span className="text-white/35"> (incl.)</span>
                 </div>
                 <div className="mt-0.5 text-[11px] text-white/45 hidden sm:block">
-                  Total résolus (incl.): {stats.totalAll} •{" "}
-                  <span className="text-emerald-200">{stats.hitsAll}</span>{" "}
-                  <span className="text-white/35">/</span>{" "}
-                  <span className="text-rose-200">{stats.missesAll}</span>
+                  Total picks affichés (incl. pending): {stats.totalDisplay}
                 </div>
               </div>
 
 		              <div className="rounded-xl border-0 bg-gradient-to-br from-indigo-900 via-blue-800 to-sky-600 p-2 sm:p-3 text-white shadow-md shadow-sky-500/25 sm:border-2 sm:border-sky-400 sm:bg-none sm:bg-white/5 sm:shadow-none">
-	                <div className="text-[11px] sm:text-xs text-white/90 sm:text-white/60 leading-tight">Taux de réussite</div>
+	                <div
+                    className="text-[11px] sm:text-xs text-white/90 sm:text-white/60 leading-tight"
+                    title="Hors blacklist • Hit rate = Hits / Résolus"
+                  >
+                    Taux de réussite (Hits / Résolus)
+                  </div>
 		                <div className="text-lg sm:text-2xl font-semibold text-emerald-200 leading-none">
 	                  {stats.hitRate.toFixed(1)}%
 	                </div>
                 <div className="mt-0.5 text-[11px] text-white/45 hidden sm:block">
-                  Total (incl.): {stats.hitRateAll.toFixed(1)}%
+                  Hors BL: {stats.hits}/{stats.total} • Incl.: {stats.hitRateAll.toFixed(1)}%
                 </div>
               </div>
 
 		              <div className="rounded-xl border-0 bg-gradient-to-br from-indigo-900 via-blue-800 to-sky-600 p-2 sm:p-3 text-white shadow-md shadow-sky-500/25 sm:border-2 sm:border-sky-400 sm:bg-none sm:bg-white/5 sm:shadow-none">
-	                <div className="text-[11px] sm:text-xs text-white/90 sm:text-white/60 leading-tight">Hits / Miss</div>
+	                <div
+                    className="text-[11px] sm:text-xs text-white/90 sm:text-white/60 leading-tight"
+                    title="Hors blacklist • Picks résolus uniquement"
+                  >
+                    Hits / Miss (hors blacklist)
+                  </div>
 		                <div className="text-lg sm:text-2xl font-semibold leading-none">
 	                  <span className="text-emerald-300">{stats.hits}</span>
 	                  <span className="text-white/50"> / </span>
                   <span className="text-rose-300">{stats.misses}</span>
                 </div>
                 <div className="mt-0.5 text-[11px] text-white/45 hidden sm:block">
-                  Total (incl.):{" "}
+                  Résolus hors BL: {stats.total} • Incl.:{" "}
                   <span className="text-emerald-200">{stats.hitsAll}</span>{" "}
                   <span className="text-white/35">/</span>{" "}
                   <span className="text-rose-200">{stats.missesAll}</span>
@@ -2255,13 +2334,21 @@ export default function AlgoHistoryView({
               </div>
 
 		              <div className="rounded-xl border-0 bg-gradient-to-br from-indigo-900 via-blue-800 to-sky-600 p-2 sm:p-3 text-white shadow-md shadow-sky-500/25 sm:border-2 sm:border-sky-400 sm:bg-none sm:bg-white/5 sm:shadow-none">
-	                <div className="text-[11px] sm:text-xs text-white/90 sm:text-white/60 leading-tight">ROI</div>
+	                <div
+                    className="text-[11px] sm:text-xs text-white/90 sm:text-white/60 leading-tight"
+                    title="Simulation sur picks résolus hors blacklist (base fixe + mise fixe)"
+                  >
+                    ROI (simulation)
+                  </div>
 	                <div
 		                  className={`text-lg sm:text-2xl font-semibold leading-none ${
 	                    stats.roiPct >= 0 ? "text-emerald-200" : "text-rose-300"
                   }`}
                 >
                   {stats.roiPct.toFixed(1)}%
+                </div>
+                <div className="mt-0.5 text-[11px] text-white/45 hidden sm:block">
+                  Hors BL résolus • Base {BASE_BANKROLL}$ • Mise {SINGLES_STAKE}$
                 </div>
 		              </div>
 			            </div>
